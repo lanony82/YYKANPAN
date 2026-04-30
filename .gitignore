@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+
+# Local runtime data
+*.log
+
+# Local secrets
+.env
+.env.*
+*.local
+
+# Personal watchlists (do not commit)
+watchlist_cn.json
+watchlist.txt
+watchlist_cn copy.json
+
+# Keep shareable sample only
+!watchlist_cn_sample.json
+
+# Personal generated market data
+data/*.csv
+data/sentiment_last_known.json
+
+# OS
+.DS_Store
+Thumbs.db
