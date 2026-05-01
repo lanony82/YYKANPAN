@@ -1,0 +1,12 @@
+{
+  "up_ratio_strong": 0.65,
+  "up_ratio_mild": 0.55,
+  "down_ratio_strong": 0.65,
+  "down_ratio_mild": 0.55,
+  "limit_up_high": 45.0,
+  "limit_up_mid": 20.0,
+  "limit_up_low": 8.0,
+  "consec_high": 12.0,
+  "consec_mid": 5.0,
+  "consec_low": 2.0
+}

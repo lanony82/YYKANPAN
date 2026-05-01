@@ -82,6 +82,41 @@ SENTIMENT_LAST_KNOWN = {
     "updated_at": None,
 }
 
+# ── Configurable sentiment thresholds ────────────────────────────────────────
+SENTIMENT_THRESHOLDS = {
+    "up_ratio_strong": 0.65,
+    "up_ratio_mild": 0.55,
+    "down_ratio_strong": 0.65,
+    "down_ratio_mild": 0.55,
+    "limit_up_high": 45,
+    "limit_up_mid": 20,
+    "limit_up_low": 8,
+    "consec_high": 12,
+    "consec_mid": 5,
+    "consec_low": 2,
+}
+_SENTIMENT_CONFIG_FILE = BASE / "data" / "sentiment_config.json"
+
+def _load_sentiment_config():
+    global SENTIMENT_THRESHOLDS
+    try:
+        if _SENTIMENT_CONFIG_FILE.exists():
+            with open(_SENTIMENT_CONFIG_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            SENTIMENT_THRESHOLDS.update(saved)
+    except Exception:
+        pass
+
+def _save_sentiment_config():
+    try:
+        _SENTIMENT_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_SENTIMENT_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(SENTIMENT_THRESHOLDS, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+_load_sentiment_config()
+
 def _bj_now() -> datetime:
     return BeijingTime.now()
 
@@ -793,6 +828,7 @@ def _evaluate_market_sentiment(
     limit_up_count: int,
     consecutive_limit_count: int,
 ) -> dict:
+    t = SENTIMENT_THRESHOLDS
     total = max(up_count + down_count, 1)
     up_ratio = up_count / total
     down_ratio = down_count / total
@@ -800,40 +836,40 @@ def _evaluate_market_sentiment(
     score = 0
     reasons = []
 
-    if up_ratio >= 0.65:
+    if up_ratio >= t["up_ratio_strong"]:
         score += 2
         reasons.append("上涨家数明显占优，赚钱效应扩散。")
-    elif up_ratio >= 0.55:
+    elif up_ratio >= t["up_ratio_mild"]:
         score += 1
         reasons.append("上涨家数略占优，情绪有修复。")
-    elif down_ratio >= 0.65:
+    elif down_ratio >= t["down_ratio_strong"]:
         score -= 2
         reasons.append("下跌家数明显占优，市场承接偏弱。")
-    elif down_ratio >= 0.55:
+    elif down_ratio >= t["down_ratio_mild"]:
         score -= 1
         reasons.append("下跌家数略占优，情绪偏谨慎。")
 
-    if limit_up_count >= 45:
+    if limit_up_count >= t["limit_up_high"]:
         score += 2
         reasons.append("涨停数量高，短线做多热度强。")
-    elif limit_up_count >= 20:
+    elif limit_up_count >= t["limit_up_mid"]:
         score += 1
         reasons.append("涨停数量尚可，说明市场仍有活跃主线。")
-    elif limit_up_count <= 8:
+    elif limit_up_count <= t["limit_up_low"]:
         score -= 1
         reasons.append("涨停数量偏少，连板扩散能力有限。")
 
-    if consecutive_limit_count >= 12:
+    if consecutive_limit_count >= t["consec_high"]:
         score += 2
         reasons.append("连板数量高，核心龙头具备持续带动作用。")
-    elif consecutive_limit_count >= 5:
+    elif consecutive_limit_count >= t["consec_mid"]:
         score += 1
         reasons.append("连板数量中等，短线接力情绪仍在。")
-    elif consecutive_limit_count <= 2:
+    elif consecutive_limit_count <= t["consec_low"]:
         score -= 1
         reasons.append("连板数量偏少，高标接力意愿不足。")
 
-    if up_ratio >= 0.55 and limit_up_count >= 20 and consecutive_limit_count >= 5:
+    if up_ratio >= t["up_ratio_mild"] and limit_up_count >= t["limit_up_mid"] and consecutive_limit_count >= t["consec_mid"]:
         stage = "上升"
         tradable = True
         advice = "适合交易，可优先围绕强势主线和核心个股，但仍需分批参与。"
@@ -1131,6 +1167,48 @@ def refresh_one(ticker):
     return jsonify(data)
 
 
+# ── Sparkline history endpoint ───────────────────────────────────────────────
+_HISTORY_CACHE: dict = {}
+_HISTORY_CACHE_TTL = 3600  # 1 hour
+
+@app.route("/api/history/<path:ticker>")
+def history(ticker):
+    """Return last N trading days of close prices for sparkline rendering."""
+    ticker = ticker.upper()
+    days = min(int(request.args.get("days", 20)), 60)
+    now = time.time()
+    cache_key = f"{ticker}_{days}"
+    cached = _HISTORY_CACHE.get(cache_key)
+    if cached and (now - cached["ts"]) < _HISTORY_CACHE_TTL:
+        return jsonify(cached["data"])
+
+    closes = _fetch_history_closes(ticker, days)
+    result = {"ok": bool(closes), "ticker": ticker, "closes": closes}
+    _HISTORY_CACHE[cache_key] = {"data": result, "ts": now}
+    return jsonify(result)
+
+
+def _fetch_history_closes(ticker: str, days: int) -> list[float]:
+    """Fetch recent close prices via Sina daily K-line API."""
+    if not _is_a_share_ticker(ticker):
+        return []
+    try:
+        symbol = _ticker_to_sina_symbol(ticker)
+        api = (
+            f"http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+            f"CN_MarketData.getKLineData?symbol={symbol}&scale=240&ma=no&datalen={days}"
+        )
+        req = urlrequest.Request(api, headers={"User-Agent": "Mozilla/5.0"})
+        with urlrequest.urlopen(req, timeout=8) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+        data = json.loads(raw)
+        if not data:
+            return []
+        return [round(float(d["close"]), 2) for d in data if d.get("close")]
+    except Exception:
+        return []
+
+
 @app.route("/api/quickread", methods=["POST"])
 def quickread():
     body = request.get_json(force=True) or {}
@@ -1186,6 +1264,7 @@ def _get_limit_stats() -> dict:
 
     date = _bj_yyyymmdd()
     result: dict = {
+        "ok": True,
         "date": date,
         "limit_up": None,
         "limit_down": None,
@@ -1195,6 +1274,7 @@ def _get_limit_stats() -> dict:
     }
 
     if ak is None:
+        result["ok"] = False
         result["error"] = "AkShare 不可用"
         return result
 
@@ -1264,6 +1344,22 @@ def _get_limit_stats() -> dict:
 @app.route("/api/limit-stats", methods=["GET"])
 def limit_stats():
     return jsonify(_get_limit_stats())
+
+
+@app.route("/api/sentiment-config", methods=["GET"])
+def get_sentiment_config():
+    return jsonify({"ok": True, "thresholds": SENTIMENT_THRESHOLDS})
+
+
+@app.route("/api/sentiment-config", methods=["POST"])
+def set_sentiment_config():
+    body = request.get_json(force=True) or {}
+    allowed_keys = set(SENTIMENT_THRESHOLDS.keys())
+    for k, v in body.items():
+        if k in allowed_keys:
+            SENTIMENT_THRESHOLDS[k] = float(v)
+    _save_sentiment_config()
+    return jsonify({"ok": True, "thresholds": SENTIMENT_THRESHOLDS})
 
 
 @app.route("/api/market-sentiment", methods=["POST"])
@@ -1346,5 +1442,5 @@ def index():
 
 
 if __name__ == "__main__":
-    print("Starting Stock Tracker → http://localhost:5000")
+    print("Starting Stock Tracker -> http://localhost:5000")
     app.run(debug=True, port=5000)

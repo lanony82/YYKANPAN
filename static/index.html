@@ -355,6 +355,7 @@
   .name-cell    { color: var(--text); max-width: 120px; overflow: hidden;
                   text-overflow: ellipsis; }
   .price-cell   { font-weight: 700; font-size: .95rem; }
+  .spark-cell   { padding: 2px 4px; min-width: 80px; }
   .up   { color: var(--up);   }
   .down { color: var(--down); }
   .flat { color: var(--flat); }
@@ -524,6 +525,27 @@
     <button id="btn-market-sentiment">判断情绪</button>
     <button id="btn-market-sentiment-auto" style="margin-left:8px">自动抓取并判断</button>
     <div class="insight-out" id="out-market-sentiment">输入上涨/下跌/涨停/连板数据后点击判断</div>
+    <details style="margin-top:8px;font-size:.8rem;">
+      <summary style="cursor:pointer;color:var(--muted)">⚙️ 情绪阈值设置</summary>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;margin-top:6px;">
+        <label>上涨占比(强) <input id="cfg-up-ratio-strong" type="number" step="0.01" style="width:60px"></label>
+        <label>上涨占比(中) <input id="cfg-up-ratio-mild" type="number" step="0.01" style="width:60px"></label>
+        <label>下跌占比(强) <input id="cfg-down-ratio-strong" type="number" step="0.01" style="width:60px"></label>
+        <label>下跌占比(中) <input id="cfg-down-ratio-mild" type="number" step="0.01" style="width:60px"></label>
+        <label>涨停(高) <input id="cfg-limit-up-high" type="number" step="1" style="width:60px"></label>
+        <label>涨停(中) <input id="cfg-limit-up-mid" type="number" step="1" style="width:60px"></label>
+        <label>涨停(低) <input id="cfg-limit-up-low" type="number" step="1" style="width:60px"></label>
+        <label>连板(高) <input id="cfg-consec-high" type="number" step="1" style="width:60px"></label>
+        <label>连板(中) <input id="cfg-consec-mid" type="number" step="1" style="width:60px"></label>
+        <label>连板(低) <input id="cfg-consec-low" type="number" step="1" style="width:60px"></label>
+      </div>
+      <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
+        <button id="cfg-preset-bull" class="del-btn">牛市预设</button>
+        <button id="cfg-preset-normal" class="del-btn">震荡预设</button>
+        <button id="cfg-preset-bear" class="del-btn">熊市预设</button>
+        <button id="cfg-save" class="del-btn" style="margin-left:auto">保存</button>
+      </div>
+    </details>
   </div>
 
   <div class="insight-card" data-card-id="mainline" draggable="true">
@@ -550,6 +572,7 @@
         <th data-col="price">现价</th>
         <th data-col="change_pct">涨跌幅</th>
         <th data-col="change">涨跌额</th>
+        <th>走势</th>
         <th data-col="prev_close">昨收</th>
         <th data-col="volume">成交量</th>
         <th data-col="high52">52周高</th>
@@ -562,7 +585,7 @@
       </tr>
     </thead>
     <tbody id="tbody">
-      <tr><td colspan="14" class="empty"><big>⏳</big>加载中…</td></tr>
+      <tr><td colspan="15" class="empty"><big>⏳</big>加载中…</td></tr>
     </tbody>
   </table>
 </div>
@@ -669,7 +692,38 @@ function withUtc8Label(ts) {
   return `${ts} UTC+8`;
 }
 
+// Chinese A-share market holidays (休市日) — weekends handled separately.
+// Format: "MM-DD" for annual fixed dates, "YYYY-MM-DD" for year-specific dates.
+const CN_HOLIDAYS_2026 = new Set([
+  // 元旦 New Year
+  "2026-01-01", "2026-01-02",
+  // 春节 Spring Festival
+  "2026-01-26", "2026-01-27", "2026-01-28", "2026-01-29", "2026-01-30",
+  "2026-02-02", "2026-02-03", "2026-02-04", "2026-02-05", "2026-02-06",
+  // 清明 Qingming
+  "2026-04-04", "2026-04-05", "2026-04-06",
+  // 劳动节 Labour Day
+  "2026-05-01", "2026-05-02", "2026-05-03", "2026-05-04", "2026-05-05",
+  // 端午 Dragon Boat
+  "2026-06-19", "2026-06-20", "2026-06-21",
+  // 中秋+国庆 Mid-Autumn + National Day
+  "2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04", "2026-10-05",
+  "2026-10-06", "2026-10-07", "2026-10-08",
+]);
+
+function isChinaMarketClosed() {
+  const p = getBeijingNowParts();
+  // Weekend check (Saturday=6, Sunday=0)
+  const dow = new Date(p.year, p.month - 1, p.day).getDay();
+  if (dow === 0 || dow === 6) return true;
+  // Holiday check
+  const dateStr = `${p.year}-${String(p.month).padStart(2,'0')}-${String(p.day).padStart(2,'0')}`;
+  return CN_HOLIDAYS_2026.has(dateStr);
+}
+
 function isBeijingQuietHours() {
+  // If today is a non-trading day (weekend or holiday), always quiet.
+  if (isChinaMarketClosed()) return true;
   const p = getBeijingNowParts();
   const minutes = p.hour * 60 + p.minute;
   // Quiet window: 15:30 to next day 08:30 (Beijing time).
@@ -868,7 +922,8 @@ function updateAutoRefreshStatus() {
   el.classList.remove("active", "paused");
   if (paused) {
     el.classList.add("paused");
-    el.textContent = "自动刷新暂停中（15:30-08:30, UTC+8）";
+    const reason = isChinaMarketClosed() ? "休市日" : "15:30-08:30, UTC+8";
+    el.textContent = `自动刷新暂停中（${reason}）`;
   } else {
     el.classList.add("active");
     el.textContent = "自动刷新开启中（UTC+8）";
@@ -891,7 +946,7 @@ async function loadStocks() {
     runWatchdog();
   } catch(e) {
     document.getElementById("tbody").innerHTML =
-      `<tr><td colspan="14" class="empty"><big>⚠️</big>加载失败，请确认服务正在运行</td></tr>`;
+      `<tr><td colspan="15" class="empty"><big>⚠️</big>加载失败，请确认服务正在运行</td></tr>`;
   } finally {
     progress(100);
     btn.classList.remove("spinning");
@@ -972,7 +1027,7 @@ function render() {
   const allRows = [...data, ...errData];
   if (!allRows.length) {
     document.getElementById("tbody").innerHTML =
-      `<tr><td colspan="14" class="empty"><big>📋</big>暂无股票，请添加</td></tr>`;
+      `<tr><td colspan="15" class="empty"><big>📋</big>暂无股票，请添加</td></tr>`;
     return;
   }
 
@@ -981,7 +1036,7 @@ function render() {
       <tr class="error-row">
         <td class="ticker-cell">${s.ticker}</td>
         <td>${s.name||"—"}</td>
-        <td colspan="11" style="color:var(--muted)">${s.error}</td>
+        <td colspan="12" style="color:var(--muted)">${s.error}</td>
         <td style="text-align:center">
           <button class="del-btn" onclick="removeStock('${s.ticker}')">删除</button>
         </td>
@@ -1005,6 +1060,7 @@ function render() {
       <td class="price-cell ${c}">${fmtNum(s.price,2)}</td>
       <td><span class="badge ${c}">${pct}</span></td>
       <td class="${c}">${chg}</td>
+      <td class="spark-cell" id="spark-${s.ticker.replace('.','_')}"></td>
       <td>${fmtNum(s.prev_close,2)}</td>
       <td>${fmtVol(s.volume)}</td>
       <td>${fmtNum(s.high52,2)}</td>
@@ -1019,6 +1075,55 @@ function render() {
       </td>
     </tr>`;
   }).join("");
+
+  // Load sparklines asynchronously after table render
+  loadSparklines(allRows.filter(r => !r.error));
+}
+
+// ── Sparkline rendering ───────────────────────────────────────────────────────
+const _sparkCache = {};
+function loadSparklines(rows) {
+  rows.forEach(s => {
+    const cellId = `spark-${s.ticker.replace('.','_')}`;
+    const cell = document.getElementById(cellId);
+    if (!cell) return;
+
+    // Use cache if fresh (< 1h)
+    const cached = _sparkCache[s.ticker];
+    if (cached && Date.now() - cached.ts < 3600000) {
+      cell.innerHTML = renderSparkSVG(cached.closes, s.change_pct);
+      return;
+    }
+
+    fetch(`/api/history/${encodeURIComponent(s.ticker)}?days=20`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok && d.closes && d.closes.length > 1) {
+          _sparkCache[s.ticker] = { closes: d.closes, ts: Date.now() };
+          cell.innerHTML = renderSparkSVG(d.closes, s.change_pct);
+        } else {
+          cell.textContent = "—";
+        }
+      })
+      .catch(() => { cell.textContent = "—"; });
+  });
+}
+
+function renderSparkSVG(closes, changePct) {
+  const w = 80, h = 24, pad = 2;
+  const min = Math.min(...closes);
+  const max = Math.max(...closes);
+  const range = max - min || 1;
+  const points = closes.map((v, i) => {
+    const x = pad + (i / (closes.length - 1)) * (w - pad * 2);
+    const y = pad + (1 - (v - min) / range) * (h - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+
+  const color = (changePct || 0) >= 0 ? "var(--up)" : "var(--down)";
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block">
+    <polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
 }
 
 // ── Sort ──────────────────────────────────────────────────────────────────────
@@ -1488,6 +1593,56 @@ if (!Object.keys(positions).length) {
 }
 
 loadWatchdogConfig();
+
+// ── Sentiment threshold config UI ───────────────────────────────────────────
+(function initSentimentConfig() {
+  const fields = [
+    "up-ratio-strong", "up-ratio-mild", "down-ratio-strong", "down-ratio-mild",
+    "limit-up-high", "limit-up-mid", "limit-up-low",
+    "consec-high", "consec-mid", "consec-low"
+  ];
+  const toKey = id => id.replace(/-/g, "_");
+
+  function fillInputs(cfg) {
+    fields.forEach(f => {
+      const el = document.getElementById(`cfg-${f}`);
+      if (el && cfg[toKey(f)] != null) el.value = cfg[toKey(f)];
+    });
+  }
+
+  // Load current config from server
+  fetch("/api/sentiment-config").then(r => r.json()).then(d => {
+    if (d.ok) fillInputs(d.thresholds);
+  }).catch(() => {});
+
+  // Presets
+  const presets = {
+    bull:   { up_ratio_strong: 0.60, up_ratio_mild: 0.50, down_ratio_strong: 0.70, down_ratio_mild: 0.60, limit_up_high: 60, limit_up_mid: 30, limit_up_low: 12, consec_high: 15, consec_mid: 8, consec_low: 3 },
+    normal: { up_ratio_strong: 0.65, up_ratio_mild: 0.55, down_ratio_strong: 0.65, down_ratio_mild: 0.55, limit_up_high: 45, limit_up_mid: 20, limit_up_low: 8, consec_high: 12, consec_mid: 5, consec_low: 2 },
+    bear:   { up_ratio_strong: 0.70, up_ratio_mild: 0.60, down_ratio_strong: 0.60, down_ratio_mild: 0.50, limit_up_high: 35, limit_up_mid: 15, limit_up_low: 5, consec_high: 8, consec_mid: 3, consec_low: 1 },
+  };
+
+  document.getElementById("cfg-preset-bull")?.addEventListener("click", () => fillInputs(presets.bull));
+  document.getElementById("cfg-preset-normal")?.addEventListener("click", () => fillInputs(presets.normal));
+  document.getElementById("cfg-preset-bear")?.addEventListener("click", () => fillInputs(presets.bear));
+
+  document.getElementById("cfg-save")?.addEventListener("click", async () => {
+    const body = {};
+    fields.forEach(f => {
+      const el = document.getElementById(`cfg-${f}`);
+      if (el && el.value) body[toKey(f)] = Number(el.value);
+    });
+    try {
+      const res = await fetch("/api/sentiment-config", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body)
+      });
+      const d = await res.json();
+      if (d.ok) alert("阈值已保存 ✓");
+    } catch { alert("保存失败"); }
+  });
+})();
 
 // ── Card drag-and-drop reorder ──────────────────────────────────────────────
 (function initCardDrag() {

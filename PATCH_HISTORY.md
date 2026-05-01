@@ -385,3 +385,15 @@ Copy this template for each new patch:
   - Drag reorder persists across page reload.
   - Hidden cards reappear via restore chips.
   - Column selector correctly changes grid layout.
+
+### 28. Fixed /api/limit-stats missing "ok" field
+- File: src/app.py
+- Type: Fix
+- Summary:
+  - Added `"ok": True` to the `_get_limit_stats()` response dict.
+  - Set `"ok": False` when AkShare is unavailable.
+  - This aligns `/api/limit-stats` with the contract expected by `tests/smoke_test.py`.
+- Why:
+  - Smoke test `test_auto_endpoints_return_json` asserted `"ok" in data` for all auto endpoints but `/api/limit-stats` never included it.
+- Validation:
+  - Smoke regression test passed (7 tests, OK).
