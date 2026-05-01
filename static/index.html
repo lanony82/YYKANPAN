@@ -145,7 +145,42 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 12px;
+    transition: opacity .2s, box-shadow .2s;
   }
+  .insight-card.dragging { opacity: 0.4; }
+  .insight-card.drag-over { box-shadow: 0 0 0 2px var(--accent); }
+  .drag-handle {
+    cursor: grab; color: var(--muted); font-size: 1rem;
+    margin-right: 6px; user-select: none; vertical-align: middle;
+  }
+  .drag-handle:active { cursor: grabbing; }
+  .insight-card h3 { display:flex; align-items:center; }
+  .card-close {
+    margin-left:auto; background:none; border:none; color:var(--muted);
+    font-size:1.1rem; cursor:pointer; padding:0 4px; line-height:1;
+  }
+  .card-close:hover { color:var(--down); }
+  .restore-bar {
+    display:none; flex-wrap:wrap; gap:6px; margin-bottom:10px;
+  }
+  .restore-bar.has-items { display:flex; }
+  .restore-chip {
+    font-size:.78rem; padding:3px 10px; border-radius:12px;
+    background:var(--surface); border:1px dashed var(--border);
+    color:var(--muted); cursor:pointer; transition:border-color .2s;
+  }
+  .restore-chip:hover { border-color:var(--accent); color:var(--text); }
+  .layout-bar {
+    display:flex; align-items:center; gap:6px; padding:0 28px 6px;
+  }
+  .layout-bar .lbl { font-size:.78rem; color:var(--muted); }
+  .col-btn {
+    width:28px; height:28px; border-radius:4px; border:1px solid var(--border);
+    background:var(--surface); color:var(--muted); cursor:pointer;
+    font-size:.82rem; line-height:1; display:inline-flex; align-items:center; justify-content:center;
+  }
+  .col-btn.active { border-color:var(--accent); color:var(--accent); background:var(--bg); }
+  .col-btn:hover { border-color:var(--accent); }
   .insight-card.full-row {
     grid-column: 1 / -1;
   }
@@ -157,22 +192,26 @@
   }
   .watchdog-inline {
     display: grid;
-    grid-template-columns: minmax(170px, 210px) minmax(170px, 210px) auto auto auto;
+    grid-template-columns: 1fr 1fr;
     gap: 8px;
     align-items: center;
     margin-bottom: 8px;
   }
   .watchdog-inline input[type="number"] {
     margin-bottom: 0;
+    max-width: 180px;
   }
   .watchdog-inline .watchdog-toggle {
     margin: 0;
     padding: 0 4px;
     width: auto;
     white-space: nowrap;
+    grid-column: 1 / -1;
+    justify-self: start;
   }
   .watchdog-inline button {
     white-space: nowrap;
+    justify-self: start;
   }
   @media (max-width: 980px) {
     .watchdog-inline {
@@ -397,28 +436,48 @@
   <span id="add-msg"></span>
 </div>
 
-<!-- Summary chips -->
-<div class="stats-bar" id="stats-bar">
-  <div class="stat-chip"><span class="label">持仓</span><span class="val" id="st-total">—</span></div>
-  <div class="stat-chip"><span class="label" style="color:var(--up)">上涨</span><span class="val up" id="st-up">—</span></div>
-  <div class="stat-chip"><span class="label" style="color:var(--down)">下跌</span><span class="val down" id="st-down">—</span></div>
-  <div class="stat-chip"><span class="label">平盘</span><span class="val flat" id="st-flat">—</span></div>
-  <div class="stat-chip"><span class="label">最强</span><span class="val up" id="st-best">—</span></div>
-  <div class="stat-chip"><span class="label">最弱</span><span class="val down" id="st-worst">—</span></div>
-  <div class="stat-chip"><span class="label">持仓市值</span><span class="val" id="st-mv">—</span></div>
-  <div class="stat-chip"><span class="label">总盈亏</span><span class="val" id="st-pnl">—</span></div>
-  <div class="stat-chip"><span class="label">持仓涨幅</span><span class="val" id="st-portfolio-chg">—</span></div>
-  <div class="stat-chip"><span class="label" style="color:var(--up)">涨停</span><span class="val up" id="st-limit-up">—</span></div>
-  <div class="stat-chip"><span class="label" style="color:var(--down)">跌停</span><span class="val down" id="st-limit-down">—</span></div>
-  <div class="stat-chip"><span class="label">昨涨停胜率</span><span class="val" id="st-zt-profit">—</span></div>
-  <div class="stat-chip"><span class="label">情绪阶段</span><span class="val" id="st-sentiment-stage">—</span></div>
-  <div class="stat-chip"><span class="label">交易建议</span><span class="val" id="st-sentiment-tradable">—</span></div>
+<!-- Layout columns selector -->
+<div class="layout-bar">
+  <span class="lbl">每行卡片数：</span>
+  <button class="col-btn" data-cols="1">1</button>
+  <button class="col-btn" data-cols="2">2</button>
+  <button class="col-btn" data-cols="3">3</button>
+  <button class="col-btn" data-cols="auto" title="自动适应">⭐</button>
 </div>
 
+<!-- Restore hidden cards -->
+<div class="restore-bar" id="restore-bar"></div>
+
 <!-- Insight tools -->
-<div class="insight-wrap">
-  <div class="insight-card full-row">
-    <h3>Watchdog（提醒系统）</h3>
+<div class="insight-wrap" id="insight-wrap">
+  <div class="insight-card" data-card-id="stats" draggable="true">
+    <h3><span class="drag-handle">⠿</span> 行情概览<button class="card-close" title="隐藏卡片">✕</button></h3>
+    <div class="stats-bar" id="stats-bar">
+      <div class="stat-chip"><span class="label">持仓</span><span class="val" id="st-total">—</span></div>
+      <div class="stat-chip"><span class="label" style="color:var(--up)">上涨</span><span class="val up" id="st-up">—</span></div>
+      <div class="stat-chip"><span class="label" style="color:var(--down)">下跌</span><span class="val down" id="st-down">—</span></div>
+      <div class="stat-chip"><span class="label">平盘</span><span class="val flat" id="st-flat">—</span></div>
+      <div class="stat-chip"><span class="label">最强</span><span class="val up" id="st-best">—</span></div>
+      <div class="stat-chip"><span class="label">最弱</span><span class="val down" id="st-worst">—</span></div>
+      <div class="stat-chip"><span class="label">持仓市值</span><span class="val" id="st-mv">—</span></div>
+      <div class="stat-chip"><span class="label">总盈亏</span><span class="val" id="st-pnl">—</span></div>
+      <div class="stat-chip"><span class="label">持仓涨幅</span><span class="val" id="st-portfolio-chg">—</span></div>
+      <div class="stat-chip"><span class="label" style="color:var(--up)">涨停</span><span class="val up" id="st-limit-up">—</span></div>
+      <div class="stat-chip"><span class="label" style="color:var(--down)">跌停</span><span class="val down" id="st-limit-down">—</span></div>
+      <div class="stat-chip"><span class="label">昨涨停胜率</span><span class="val" id="st-zt-profit">—</span></div>
+      <div class="stat-chip"><span class="label">情绪阶段</span><span class="val" id="st-sentiment-stage">—</span></div>
+      <div class="stat-chip"><span class="label">交易建议</span><span class="val" id="st-sentiment-tradable">—</span></div>
+    </div>
+  </div>
+
+  <div class="insight-card" data-card-id="ai-edge" draggable="true">
+    <h3><span class="drag-handle">⠇</span> AI 核心策略引擎 <span class="ai-badge">Core Edge</span><button class="card-close" title="隐藏卡片">✕</button></h3>
+    <button id="btn-ai-edge">刷新 AI 策略</button>
+    <div class="insight-out" id="out-ai-edge">将持仓涨跌结构转为执行清单（偏多/偏空/震荡 + 关注标的 + 风险标的）</div>
+  </div>
+
+  <div class="insight-card" data-card-id="watchdog" draggable="true">
+    <h3><span class="drag-handle">⠇</span> Watchdog（提醒系统）<button class="card-close" title="隐藏卡片">✕</button></h3>
     <div class="traffic-light-wrap">
       <div class="traffic-light-circle green">🟢</div>
       <div class="traffic-light-text">
@@ -446,40 +505,39 @@
 - |浮盈亏%| >= 浮盈亏阈值（仅对已设置持仓股数+成本价的股票）</div>
   </div>
 
-  <div class="insight-card">
-    <h3>主线板块自动判断</h3>
-    <button id="btn-mainline-auto">手动刷新主线判断</button>
-    <div class="insight-out" id="out-mainline-auto">自动读取今日涨幅榜与成交额前排，输出主线、龙头和参与建议</div>
-  </div>
-
-  <div class="insight-card">
-    <h3>涨跌停 &amp; 昨日涨停表现 <span style="font-size:.7rem;color:var(--muted)">短线核心</span></h3>
+  <div class="insight-card" data-card-id="limit-stats" draggable="true">
+    <h3><span class="drag-handle">⠇</span> 涨跌停 &amp; 昨日涨停表现 <span style="font-size:.7rem;color:var(--muted)">短线核心</span><button class="card-close" title="隐藏卡片">✕</button></h3>
     <button id="btn-limit-stats">刷新涨跌停数据</button>
     <div class="insight-out" id="out-limit-stats">加载中...</div>
   </div>
 
-  <div class="insight-card">
-    <h3>A股情绪判断</h3>
-    <input id="inp-up-count" type="number" step="1" placeholder="上涨家数" />
-    <input id="inp-down-count" type="number" step="1" placeholder="下跌家数" />
-    <input id="inp-limit-up-count" type="number" step="1" placeholder="涨停数量" />
-    <input id="inp-consecutive-limit-count" type="number" step="1" placeholder="连板数量" />
+  <div class="insight-card" data-card-id="sentiment" draggable="true">
+    <h3><span class="drag-handle">⠇</span> A股情绪判断<button class="card-close" title="隐藏卡片">✕</button></h3>
+    <input id="inp-up-count" type="number" step="1" placeholder="上涨家数（如 2800）" title="今日沪深两市上涨股票总数" />
+    <input id="inp-down-count" type="number" step="1" placeholder="下跌家数（如 2100）" title="今日沪深两市下跌股票总数" />
+    <input id="inp-limit-up-count" type="number" step="1" placeholder="涨停数量（如 60）" title="今日涨停板股票数（含ST）" />
+    <input id="inp-consecutive-limit-count" type="number" step="1" placeholder="连板数量（如 15）" title="连续2日以上涨停的股票数" />
+    <div style="font-size:.78rem;color:var(--muted);margin:4px 0 6px;line-height:1.5">
+      上涨/下跌家数：沪深两市涨跌股票总数&nbsp;&nbsp;|&nbsp;&nbsp;涨停数量：当日封板股数&nbsp;&nbsp;|&nbsp;&nbsp;连板数量：≥2连板股数<br>
+      数据来源：东方财富/同花顺/iWenCai，也可点击"自动抓取并判断"一键获取
+    </div>
     <button id="btn-market-sentiment">判断情绪</button>
     <button id="btn-market-sentiment-auto" style="margin-left:8px">自动抓取并判断</button>
     <div class="insight-out" id="out-market-sentiment">输入上涨/下跌/涨停/连板数据后点击判断</div>
   </div>
 
-  <div class="insight-card">
-    <h3>智能简报（自动采集+分析）</h3>
+  <div class="insight-card" data-card-id="mainline" draggable="true">
+    <h3><span class="drag-handle">⠇</span> 主线板块自动判断<button class="card-close" title="隐藏卡片">✕</button></h3>
+    <button id="btn-mainline-auto">手动刷新主线判断</button>
+    <div class="insight-out" id="out-mainline-auto">自动读取今日涨幅榜与成交额前排，输出主线、龙头和参与建议</div>
+  </div>
+
+  <div class="insight-card" data-card-id="brief" draggable="true">
+    <h3><span class="drag-handle">⠇</span> 智能简报（自动采集+分析）<button class="card-close" title="隐藏卡片">✕</button></h3>
     <button id="btn-auto-brief">手动刷新简报</button>
     <div class="insight-out" id="out-auto-brief">系统每30分钟自动更新一次，你也可以手动刷新</div>
   </div>
 
-  <div class="insight-card">
-    <h3>AI 核心策略引擎 <span class="ai-badge">Core Edge</span></h3>
-    <button id="btn-ai-edge">刷新 AI 策略</button>
-    <div class="insight-out" id="out-ai-edge">将持仓涨跌结构转为执行清单（偏多/偏空/震荡 + 关注标的 + 风险标的）</div>
-  </div>
 </div>
 
 <!-- Table -->
@@ -1420,13 +1478,159 @@ if (!Object.keys(positions).length) {
     "000858.SZ": { shares: 500,  cost: 148.50 },
     "601318.SS": { shares: 1000, cost: 52.00 },
     "300750.SZ": { shares: 200,  cost: 210.00 },
-    "601398.SS": { shares: 5000, cost: 5.20 },
+    "000001.SZ": { shares: 2000, cost: 11.50 },
+    "600036.SS": { shares: 800,  cost: 35.00 },
+    "600900.SS": { shares: 600,  cost: 25.00 },
+    "601857.SS": { shares: 3000, cost: 8.80 },
   };
   positions = defaults;
   savePositions();
 }
 
 loadWatchdogConfig();
+
+// ── Card drag-and-drop reorder ──────────────────────────────────────────────
+(function initCardDrag() {
+  const CARD_ORDER_KEY = "card_order_v1";
+  const wrap = document.getElementById("insight-wrap");
+  let dragSrc = null;
+
+  function getCards() { return [...wrap.querySelectorAll(".insight-card[data-card-id]")]; }
+
+  function saveOrder() {
+    const order = getCards().map(c => c.dataset.cardId);
+    localStorage.setItem(CARD_ORDER_KEY, JSON.stringify(order));
+  }
+
+  function restoreOrder() {
+    try {
+      const order = JSON.parse(localStorage.getItem(CARD_ORDER_KEY));
+      if (!Array.isArray(order)) return;
+      const map = {};
+      getCards().forEach(c => { map[c.dataset.cardId] = c; });
+      order.forEach(id => { if (map[id]) wrap.appendChild(map[id]); });
+    } catch {}
+  }
+
+  function bindCard(card) {
+    card.addEventListener("dragstart", e => {
+      dragSrc = card;
+      card.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", card.dataset.cardId);
+    });
+    card.addEventListener("dragend", () => {
+      card.classList.remove("dragging");
+      getCards().forEach(c => c.classList.remove("drag-over"));
+      dragSrc = null;
+    });
+    card.addEventListener("dragover", e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      if (card !== dragSrc) card.classList.add("drag-over");
+    });
+    card.addEventListener("dragleave", () => { card.classList.remove("drag-over"); });
+    card.addEventListener("drop", e => {
+      e.preventDefault();
+      card.classList.remove("drag-over");
+      if (!dragSrc || dragSrc === card) return;
+      const cards = getCards();
+      const fromIdx = cards.indexOf(dragSrc);
+      const toIdx = cards.indexOf(card);
+      if (fromIdx < toIdx) card.after(dragSrc);
+      else card.before(dragSrc);
+      saveOrder();
+    });
+  }
+
+  getCards().forEach(bindCard);
+  restoreOrder();
+})();
+
+// ── Card hide / restore ─────────────────────────────────────────────────────
+(function initCardVisibility() {
+  const HIDDEN_KEY = "hidden_cards_v1";
+  const CARD_NAMES = {
+    stats: "行情概览", "ai-edge": "AI 策略引擎", watchdog: "Watchdog",
+    "limit-stats": "涨跌停", sentiment: "情绪判断",
+    mainline: "主线板块", brief: "智能简报"
+  };
+  const wrap = document.getElementById("insight-wrap");
+  const bar = document.getElementById("restore-bar");
+
+  function getHidden() {
+    try { return JSON.parse(localStorage.getItem(HIDDEN_KEY)) || []; } catch { return []; }
+  }
+  function setHidden(arr) { localStorage.setItem(HIDDEN_KEY, JSON.stringify(arr)); }
+
+  function hideCard(id) {
+    const card = wrap.querySelector(`.insight-card[data-card-id="${id}"]`);
+    if (card) card.style.display = "none";
+    const h = getHidden(); if (!h.includes(id)) { h.push(id); setHidden(h); }
+    renderBar();
+  }
+
+  function showCard(id) {
+    const card = wrap.querySelector(`.insight-card[data-card-id="${id}"]`);
+    if (card) card.style.display = "";
+    const h = getHidden().filter(x => x !== id); setHidden(h);
+    renderBar();
+  }
+
+  function renderBar() {
+    const h = getHidden();
+    bar.innerHTML = "";
+    if (!h.length) { bar.classList.remove("has-items"); return; }
+    bar.classList.add("has-items");
+    const label = document.createElement("span");
+    label.style.cssText = "font-size:.78rem;color:var(--muted);align-self:center";
+    label.textContent = "已隐藏：";
+    bar.appendChild(label);
+    h.forEach(id => {
+      const chip = document.createElement("button");
+      chip.className = "restore-chip";
+      chip.textContent = "+ " + (CARD_NAMES[id] || id);
+      chip.onclick = () => showCard(id);
+      bar.appendChild(chip);
+    });
+  }
+
+  // bind close buttons
+  wrap.querySelectorAll(".card-close").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const card = btn.closest(".insight-card");
+      if (card) hideCard(card.dataset.cardId);
+    });
+  });
+
+  // restore saved hidden state
+  getHidden().forEach(id => {
+    const card = wrap.querySelector(`.insight-card[data-card-id="${id}"]`);
+    if (card) card.style.display = "none";
+  });
+  renderBar();
+})();
+
+// ── Column layout selector ─────────────────────────────────────────────────────────
+(function initColLayout() {
+  const COL_KEY = "card_cols_v1";
+  const wrap = document.getElementById("insight-wrap");
+  const btns = document.querySelectorAll(".col-btn");
+
+  function apply(val) {
+    if (val === "auto") {
+      wrap.style.gridTemplateColumns = "repeat(auto-fit, minmax(280px, 1fr))";
+    } else {
+      wrap.style.gridTemplateColumns = `repeat(${val}, 1fr)`;
+    }
+    btns.forEach(b => b.classList.toggle("active", b.dataset.cols === val));
+    localStorage.setItem(COL_KEY, val);
+  }
+
+  btns.forEach(b => b.addEventListener("click", () => apply(b.dataset.cols)));
+  apply(localStorage.getItem(COL_KEY) || "auto");
+})();
+
 applyColorMode(localStorage.getItem("color_mode") || "cn");
 applyPrivacyMode();
 updateAutoRefreshStatus();

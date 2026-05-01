@@ -364,3 +364,24 @@ Copy this template for each new patch:
 - Summary:
   - README rewritten as product-focused V1 document with capability table, API reference, tech stack.
   - PATCH_HISTORY updated with all V1 session entries (19-26).
+
+## 2026-04-30
+
+### 27. Dashboard card drag-reorder, hide/restore, and column layout selector
+- File: static/index.html
+- Type: Improvement
+- Summary:
+  - All insight cards are now draggable; card order persists in localStorage (`card_order_v1`).
+  - Added drag handle (⡿) and close button (✕) on each card header.
+  - Hidden cards appear as restore chips in a bar above the grid; click to restore.
+  - Added column layout bar (1 / 2 / 3 / auto) with persistence (`card_cols_v1`).
+  - Stats bar moved inside its own card so it participates in reorder/hide.
+  - AI Core Edge card promoted to second position by default.
+  - Sentiment inputs now show placeholder examples and help text.
+  - Updated default positions (removed 601398, added 000001/600036/600900/601857).
+- Why:
+  - Let users customize dashboard layout and focus on the cards they use most.
+- Validation:
+  - Drag reorder persists across page reload.
+  - Hidden cards reappear via restore chips.
+  - Column selector correctly changes grid layout.
