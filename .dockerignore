@@ -1,0 +1,15 @@
+.venv/
+.git/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.env
+.env.*
+uv.lock
+node_modules/
+*.md
+LICENSE
+daily_collect.ps1
+tests/
+data/

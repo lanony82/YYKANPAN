@@ -7,11 +7,11 @@ This file records code patches and production fixes for this project.
 Use this block in each patch entry to capture exact run commands used.
 
 - Before:
-  - App: python src/app.py
+  - App: python src/server.py
   - Collect: python src/collect_stocks.py
   - Summary: python src/summary.py
 - After:
-  - App: python src/app.py
+  - App: python src/server.py
   - Collect: python src/collect_stocks.py
   - Summary: python src/summary.py
 - Verification:

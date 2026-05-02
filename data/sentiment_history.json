@@ -1,0 +1,38 @@
+[
+  {
+    "ts": "2026-05-02 15:55:44",
+    "score": 6,
+    "stage": "上升",
+    "up_ratio": 0.7143,
+    "inputs": {
+      "up_count": 3000,
+      "down_count": 1200,
+      "limit_up_count": 79,
+      "consecutive_limit_count": 18
+    }
+  },
+  {
+    "ts": "2026-05-02 16:15:13",
+    "score": 6,
+    "stage": "上升",
+    "up_ratio": 0.7143,
+    "inputs": {
+      "up_count": 3000,
+      "down_count": 1200,
+      "limit_up_count": 79,
+      "consecutive_limit_count": 18
+    }
+  },
+  {
+    "ts": "2026-05-02 17:06:36",
+    "score": 6,
+    "stage": "上升",
+    "up_ratio": 0.7143,
+    "inputs": {
+      "up_count": 3000,
+      "down_count": 1200,
+      "limit_up_count": 79,
+      "consecutive_limit_count": 18
+    }
+  }
+]

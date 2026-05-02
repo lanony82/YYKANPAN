@@ -161,6 +161,47 @@ def _save_sentiment_last_known() -> None:
 
 _load_sentiment_last_known()
 
+# ── Sentiment history (for trend chart) ──────────────────────────────────────
+_SENTIMENT_HISTORY_FILE = BASE / "data" / "sentiment_history.json"
+
+def _load_sentiment_history() -> list:
+    try:
+        if _SENTIMENT_HISTORY_FILE.exists():
+            data = json.loads(_SENTIMENT_HISTORY_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+    except Exception:
+        pass
+    return []
+
+def _save_sentiment_history(history: list) -> None:
+    try:
+        _SENTIMENT_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _SENTIMENT_HISTORY_FILE.write_text(
+            json.dumps(history[-200:], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+def _append_sentiment_history(result: dict) -> None:
+    """Append a sentiment evaluation snapshot to history (max 1 per hour)."""
+    history = _load_sentiment_history()
+    ts = _bj_datetime_str()
+    hour_key = ts[:13]  # "YYYY-MM-DD HH"
+    # Deduplicate: skip if we already have an entry this hour
+    if history and history[-1].get("ts", "")[:13] == hour_key:
+        return
+    entry = {
+        "ts": ts,
+        "score": result.get("metrics", {}).get("score", 0),
+        "stage": result.get("stage", ""),
+        "up_ratio": result.get("metrics", {}).get("up_ratio"),
+        "inputs": result.get("inputs"),
+    }
+    history.append(entry)
+    _save_sentiment_history(history)
+
 GLOSSARY = {
     "cpi": "CPI 就是居民消费价格指数。你可以把它理解成'日常买菜、房租、交通'这类生活成本的温度计。",
     "ppi": "PPI 是工业品出厂价格指数，反映上游原材料和工厂出厂价格的变化。",
@@ -1380,12 +1421,14 @@ def market_sentiment():
         "consecutive_limit_count": consecutive_limit_count,
     })
 
-    return jsonify(_evaluate_market_sentiment(
+    result = _evaluate_market_sentiment(
         up_count,
         down_count,
         limit_up_count,
         consecutive_limit_count,
-    ))
+    )
+    _append_sentiment_history(result)
+    return jsonify(result)
 
 
 @app.route("/api/market-sentiment-auto", methods=["GET"])
@@ -1416,7 +1459,20 @@ def market_sentiment_auto():
         result["fallback_fields"] = fallback_fields
         result["fallback_note"] = f"以下字段使用最近一次可用值: {', '.join(fallback_fields)}"
         result["last_known_updated_at"] = SENTIMENT_LAST_KNOWN.get("updated_at")
+    _append_sentiment_history(result)
     return jsonify(result)
+
+
+@app.route("/api/sentiment-history", methods=["GET"])
+def sentiment_history():
+    days = request.args.get("days", "30")
+    try:
+        days = int(days)
+    except ValueError:
+        days = 30
+    history = _load_sentiment_history()
+    # Return the last N days (approx: 24 entries/day max)
+    return jsonify({"ok": True, "history": history[-(days * 24):]})
 
 
 @app.route("/api/mainline-auto", methods=["GET"])
@@ -1434,6 +1490,41 @@ def ai_edge():
     return jsonify(_build_ai_edge_report(force_refresh=force_refresh))
 
 
+@app.route("/api/config/export", methods=["GET"])
+def config_export():
+    """Export watchlist as a downloadable JSON config file."""
+    try:
+        watchlist = json.loads(WATCHLIST.read_text(encoding="utf-8")) if WATCHLIST.exists() else []
+    except Exception:
+        watchlist = []
+    payload = {"watchlist": watchlist, "exported_at": BeijingTime.now_str()}
+    return app.response_class(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        mimetype="application/json",
+        headers={"Content-Disposition": "attachment; filename=yykanpan_config.json"},
+    )
+
+
+@app.route("/api/config/import", methods=["POST"])
+def config_import():
+    """Import a previously exported config JSON (watchlist + positions)."""
+    data = request.get_json(silent=True)
+    if not data or "watchlist" not in data:
+        return jsonify({"ok": False, "msg": "无效的配置文件"})
+    watchlist = data["watchlist"]
+    if not isinstance(watchlist, list):
+        return jsonify({"ok": False, "msg": "watchlist 格式无效"})
+    # Validate each entry
+    for entry in watchlist:
+        if not isinstance(entry, dict) or "ticker" not in entry:
+            return jsonify({"ok": False, "msg": "watchlist 条目缺少 ticker 字段"})
+    try:
+        WATCHLIST.write_text(json.dumps(watchlist, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        return jsonify({"ok": False, "msg": f"保存失败: {e}"})
+    return jsonify({"ok": True, "count": len(watchlist)})
+
+
 # ── Serve frontend ────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -1443,4 +1534,6 @@ def index():
 
 if __name__ == "__main__":
     print("Starting Stock Tracker -> http://localhost:5000")
-    app.run(debug=True, port=5000)
+    host = os.environ.get("HOST", "127.0.0.1")
+    debug = os.environ.get("FLASK_DEBUG", "1") == "1"
+    app.run(host=host, debug=debug, port=5000)

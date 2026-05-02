@@ -23,7 +23,7 @@ SRC_DIR = BASE_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-import app as stock_app  # noqa: E402
+import server as stock_app  # noqa: E402
 
 
 class SmokeRegressionTest(unittest.TestCase):

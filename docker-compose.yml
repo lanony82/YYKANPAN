@@ -1,0 +1,23 @@
+services:
+  yykanpan:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: yykanpan
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      # Persist collected CSV data across container restarts
+      - ./data:/app/data
+      # Mount your personal watchlist (create from sample if needed)
+      - ./watchlist_cn.json:/app/watchlist_cn.json:ro
+    environment:
+      # Timezone (already set in Dockerfile, override if needed)
+      - TZ=Asia/Shanghai
+      # Cron schedule for collect_stocks.py (default: weekdays 18:00)
+      - COLLECT_CRON=0 18 * * 1-5
+      # Set to 0 to disable automatic collection
+      - COLLECT_ENABLED=1
+      # Gunicorn workers (default 2, increase for heavier load)
+      # - GUNICORN_WORKERS=2

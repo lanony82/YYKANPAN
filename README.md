@@ -25,7 +25,7 @@
 pip install -e .
 
 # 3. 启动
-python src/app.py
+python src/server.py
 ```
 
 打开 http://127.0.0.1:5000
@@ -34,7 +34,10 @@ python src/app.py
 
 ```
 src/
-  app.py              Flask 后端 + API
+  server.py           Flask 后端 + API
+  providers.py        数据源（AkShare/Sina/Yahoo）
+  sentiment.py        情绪判断引擎
+  analysis.py         主线/策略分析
   collect_stocks.py   每日 CSV 快照采集
   summary.py          终端快速查看
   time_utils.py       UTC+8 时间工具类
@@ -42,7 +45,12 @@ static/
   index.html          前端单页面（暗色主题）
 data/
   YYYY-MM-DD.csv      每日快照（保留最近5天）
-  sentiment_last_known.json  情绪缓存
+  sentiment_config.json     情绪阈值配置
+  sentiment_history.json    情绪历史
+  sentiment_last_known.json 情绪缓存
+docker/
+  Dockerfile          容器构建
+  docker-entrypoint.sh  启动脚本（cron + gunicorn）
 tests/
   smoke_test.py       回归测试（7项）
 ```
@@ -136,18 +144,18 @@ Expected result:
 ## Operations Checklist
 
 Daily:
-- Start service: `python src/app.py`
+- Start service: `python src/server.py`
 - Collect snapshot: `python src/collect_stocks.py`
 - Confirm latest data file in data/
 
 Before release:
-- Run syntax check: `python -m py_compile src/app.py src/collect_stocks.py src/summary.py`
+- Run syntax check: `python -m py_compile src/server.py src/collect_stocks.py src/summary.py`
 - Run smoke test: `python tests/smoke_test.py`
 - Log changes in PATCH_HISTORY.md
 
 ## Troubleshooting
 
-- If root command python app.py fails after src migration, use python src/app.py.
+- If root command fails, use `python src/server.py`.
 - If Yahoo requests fail due network resets, collector/app fallback providers should still return A-share data.
 - Check PATCH_HISTORY.md for recent fixes and validation notes.
 
