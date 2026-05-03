@@ -5,6 +5,7 @@ sentiment.py — Market sentiment evaluation, history, and configurable threshol
 import json
 import pathlib
 
+from config import cfg
 from time_utils import BeijingTime
 from providers import with_retries
 
@@ -17,33 +18,16 @@ from urllib import request as urlrequest
 from urllib import parse as urlparse
 import re
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
+# ── Paths (from config) ──────────────────────────────────────────────────────
 BASE = pathlib.Path(__file__).resolve().parent.parent
-SENTIMENT_CACHE_FILE = BASE / "data" / "sentiment_last_known.json"
-_SENTIMENT_CONFIG_FILE = BASE / "data" / "sentiment_config.json"
-_SENTIMENT_HISTORY_FILE = BASE / "data" / "sentiment_history.json"
+SENTIMENT_CACHE_FILE = cfg.SENTIMENT_CACHE_PATH
+_SENTIMENT_CONFIG_FILE = cfg.SENTIMENT_CONFIG_PATH
+_SENTIMENT_HISTORY_FILE = cfg.SENTIMENT_HISTORY_PATH
 
 # ── Configurable thresholds ───────────────────────────────────────────────────
-SENTIMENT_THRESHOLDS = {
-    "up_ratio_strong": 0.65,
-    "up_ratio_mild": 0.55,
-    "down_ratio_strong": 0.65,
-    "down_ratio_mild": 0.55,
-    "limit_up_high": 45,
-    "limit_up_mid": 20,
-    "limit_up_low": 8,
-    "consec_high": 12,
-    "consec_mid": 5,
-    "consec_low": 2,
-}
+SENTIMENT_THRESHOLDS = dict(cfg.SENTIMENT_THRESHOLDS)
 
-SENTIMENT_LAST_KNOWN = {
-    "up_count": 3877,
-    "down_count": 1480,
-    "limit_up_count": None,
-    "consecutive_limit_count": None,
-    "updated_at": None,
-}
+SENTIMENT_LAST_KNOWN = dict(cfg.SENTIMENT_DEFAULTS)
 
 
 # ── Config persistence ───────────────────────────────────────────────────────
@@ -135,7 +119,7 @@ def _save_sentiment_history(history: list) -> None:
     try:
         _SENTIMENT_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
         _SENTIMENT_HISTORY_FILE.write_text(
-            json.dumps(history[-200:], ensure_ascii=False, indent=2),
+            json.dumps(history[-cfg.SENTIMENT_HISTORY_MAX_ENTRIES:], ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
     except Exception:
@@ -245,11 +229,11 @@ def evaluate_market_sentiment(
 # ── Auto-fetch inputs ────────────────────────────────────────────────────────
 
 def _fetch_iwencai_count(keyword: str, pattern: str) -> int | None:
-    url = f"https://www.iwencai.com/unifiedwap/result?w={urlparse.quote(keyword)}"
+    url = f"{cfg.IWENCAI_URL}?w={urlparse.quote(keyword)}"
     req = urlrequest.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
         def _download():
-            with urlrequest.urlopen(req, timeout=10) as resp:
+            with urlrequest.urlopen(req, timeout=cfg.IWENCAI_TIMEOUT) as resp:
                 return resp.read().decode("utf-8", errors="ignore")
 
         text = with_retries(_download)

@@ -10,6 +10,7 @@ import time
 import yfinance as yf
 from urllib import request as urlrequest
 
+from config import cfg
 from time_utils import BeijingTime
 
 try:
@@ -17,11 +18,11 @@ try:
 except Exception:
     ak = None
 
-# ── Constants ─────────────────────────────────────────────────────────────────
-MAX_FETCH_RETRIES = 2
-RETRY_BACKOFF_SECONDS = 0.8
-AK_CACHE_TTL_SECONDS = 20
-_52W_CACHE_TTL = 12 * 3600
+# ── Constants (from config) ───────────────────────────────────────────────────
+MAX_FETCH_RETRIES = cfg.MAX_FETCH_RETRIES
+RETRY_BACKOFF_SECONDS = cfg.RETRY_BACKOFF_SECONDS
+AK_CACHE_TTL_SECONDS = cfg.AK_CACHE_TTL_SECONDS
+_52W_CACHE_TTL = cfg.WEEK52_CACHE_TTL_SECONDS
 
 # ── Module-level caches ──────────────────────────────────────────────────────
 AK_CACHE_DF = None
@@ -94,11 +95,11 @@ def _fetch_52w(ticker: str) -> tuple:
     try:
         symbol = _ticker_to_sina_symbol(ticker)
         api = (
-            f"http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
-            f"CN_MarketData.getKLineData?symbol={symbol}&scale=240&ma=no&datalen=260"
+            f"{cfg.SINA_KLINE_API_URL}"
+            f"?symbol={symbol}&scale=240&ma=no&datalen={cfg.TRADING_DAYS_PER_YEAR}"
         )
         req = urlrequest.Request(api, headers={"User-Agent": "Mozilla/5.0"})
-        with urlrequest.urlopen(req, timeout=8) as resp:
+        with urlrequest.urlopen(req, timeout=cfg.SINA_KLINE_TIMEOUT) as resp:
             raw = resp.read().decode("utf-8", errors="ignore")
 
         data = json.loads(raw)
@@ -123,7 +124,7 @@ def fetch_stock_yahoo(ticker: str, name: str = "") -> dict:
     try:
         def _query():
             t_local = yf.Ticker(ticker)
-            hist_local = t_local.history(period="2d", timeout=10)
+            hist_local = t_local.history(period=cfg.YAHOO_HISTORY_PERIOD, timeout=cfg.YAHOO_TIMEOUT)
             return t_local, hist_local
 
         t, hist = with_retries(_query)
@@ -218,7 +219,7 @@ def fetch_stock_sina(ticker: str, name: str = "") -> dict:
         return {"ticker": ticker, "name": name, "error": "not an A-share ticker"}
 
     symbol = _ticker_to_sina_symbol(ticker)
-    url = f"https://hq.sinajs.cn/list={symbol}"
+    url = f"{cfg.SINA_QUOTE_API_URL}{symbol}"
     req = urlrequest.Request(
         url,
         headers={
@@ -229,7 +230,7 @@ def fetch_stock_sina(ticker: str, name: str = "") -> dict:
 
     try:
         def _download():
-            with urlrequest.urlopen(req, timeout=10) as resp:
+            with urlrequest.urlopen(req, timeout=cfg.SINA_QUOTE_TIMEOUT) as resp:
                 return resp.read().decode("gbk", errors="ignore")
 
         body = with_retries(_download)
@@ -273,11 +274,11 @@ def fetch_history_closes(ticker: str, days: int) -> list[float]:
     try:
         symbol = _ticker_to_sina_symbol(ticker)
         api = (
-            f"http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
-            f"CN_MarketData.getKLineData?symbol={symbol}&scale=240&ma=no&datalen={days}"
+            f"{cfg.SINA_KLINE_API_URL}"
+            f"?symbol={symbol}&scale=240&ma=no&datalen={days}"
         )
         req = urlrequest.Request(api, headers={"User-Agent": "Mozilla/5.0"})
-        with urlrequest.urlopen(req, timeout=8) as resp:
+        with urlrequest.urlopen(req, timeout=cfg.SINA_KLINE_TIMEOUT) as resp:
             raw = resp.read().decode("utf-8", errors="ignore")
         data = json.loads(raw)
         if not data:

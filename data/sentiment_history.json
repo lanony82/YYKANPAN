@@ -34,5 +34,77 @@
       "limit_up_count": 79,
       "consecutive_limit_count": 18
     }
+  },
+  {
+    "ts": "2026-05-03 08:48:44",
+    "score": 6,
+    "stage": "上升",
+    "up_ratio": 0.7143,
+    "inputs": {
+      "up_count": 3000,
+      "down_count": 1200,
+      "limit_up_count": 79,
+      "consecutive_limit_count": 18
+    }
+  },
+  {
+    "ts": "2026-05-03 09:18:15",
+    "score": 6,
+    "stage": "上升",
+    "up_ratio": 0.7143,
+    "inputs": {
+      "up_count": 3000,
+      "down_count": 1200,
+      "limit_up_count": 79,
+      "consecutive_limit_count": 18
+    }
+  },
+  {
+    "ts": "2026-05-03 10:18:17",
+    "score": 6,
+    "stage": "上升",
+    "up_ratio": 0.7143,
+    "inputs": {
+      "up_count": 3000,
+      "down_count": 1200,
+      "limit_up_count": 79,
+      "consecutive_limit_count": 18
+    }
+  },
+  {
+    "ts": "2026-05-03 11:18:12",
+    "score": 6,
+    "stage": "上升",
+    "up_ratio": 0.7143,
+    "inputs": {
+      "up_count": 3000,
+      "down_count": 1200,
+      "limit_up_count": 79,
+      "consecutive_limit_count": 18
+    }
+  },
+  {
+    "ts": "2026-05-03 12:18:18",
+    "score": 6,
+    "stage": "上升",
+    "up_ratio": 0.7143,
+    "inputs": {
+      "up_count": 3000,
+      "down_count": 1200,
+      "limit_up_count": 79,
+      "consecutive_limit_count": 18
+    }
+  },
+  {
+    "ts": "2026-05-03 14:17:21",
+    "score": 6,
+    "stage": "上升",
+    "up_ratio": 0.7143,
+    "inputs": {
+      "up_count": 3000,
+      "down_count": 1200,
+      "limit_up_count": 79,
+      "consecutive_limit_count": 18
+    }
   }
 ]

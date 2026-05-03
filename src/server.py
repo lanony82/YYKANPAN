@@ -18,6 +18,7 @@ import logging
 from datetime import datetime
 from urllib import request as urlrequest
 from urllib import parse as urlparse
+from config import cfg
 from time_utils import BeijingTime
 
 try:
@@ -46,9 +47,9 @@ def _configure_upstream_logging() -> None:
 _configure_upstream_logging()
 
 BASE        = pathlib.Path(__file__).resolve().parent.parent
-STATIC_DIR  = BASE / "static"
-WATCHLIST   = BASE / "watchlist_cn.json"
-SENTIMENT_CACHE_FILE = BASE / "data" / "sentiment_last_known.json"
+STATIC_DIR  = cfg.STATIC_DIR
+WATCHLIST   = cfg.WATCHLIST_PATH
+SENTIMENT_CACHE_FILE = cfg.SENTIMENT_CACHE_PATH
 
 app = Flask(
     __name__,
@@ -60,42 +61,22 @@ app = Flask(
 # the full A-share quote table on every ticker request.
 AK_CACHE_DF = None
 AK_CACHE_TS = 0.0
-AK_CACHE_TTL_SECONDS = 20
+AK_CACHE_TTL_SECONDS = cfg.AK_CACHE_TTL_SECONDS
 STOCKS_CACHE_DATA = None
 STOCKS_CACHE_TS = 0.0
-STOCKS_CACHE_TTL_SECONDS = 600
-MAX_FETCH_RETRIES = 2
-RETRY_BACKOFF_SECONDS = 0.8
+STOCKS_CACHE_TTL_SECONDS = cfg.STOCKS_CACHE_TTL_SECONDS
+MAX_FETCH_RETRIES = cfg.MAX_FETCH_RETRIES
+RETRY_BACKOFF_SECONDS = cfg.RETRY_BACKOFF_SECONDS
 
 # 52-week high/low cache — keyed by code, refreshed every 12 hours.
 _52W_CACHE: dict = {}
-_52W_CACHE_TTL = 12 * 3600
-NEWS_FEEDS = [
-    "https://finance.yahoo.com/news/rssindex",
-    "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
-]
-SENTIMENT_LAST_KNOWN = {
-    "up_count": 3877,
-    "down_count": 1480,
-    "limit_up_count": None,
-    "consecutive_limit_count": None,
-    "updated_at": None,
-}
+_52W_CACHE_TTL = cfg.WEEK52_CACHE_TTL_SECONDS
+NEWS_FEEDS = cfg.NEWS_FEEDS
+SENTIMENT_LAST_KNOWN = dict(cfg.SENTIMENT_DEFAULTS)
 
 # ── Configurable sentiment thresholds ────────────────────────────────────────
-SENTIMENT_THRESHOLDS = {
-    "up_ratio_strong": 0.65,
-    "up_ratio_mild": 0.55,
-    "down_ratio_strong": 0.65,
-    "down_ratio_mild": 0.55,
-    "limit_up_high": 45,
-    "limit_up_mid": 20,
-    "limit_up_low": 8,
-    "consec_high": 12,
-    "consec_mid": 5,
-    "consec_low": 2,
-}
-_SENTIMENT_CONFIG_FILE = BASE / "data" / "sentiment_config.json"
+SENTIMENT_THRESHOLDS = dict(cfg.SENTIMENT_THRESHOLDS)
+_SENTIMENT_CONFIG_FILE = cfg.SENTIMENT_CONFIG_PATH
 
 def _load_sentiment_config():
     global SENTIMENT_THRESHOLDS
@@ -162,7 +143,7 @@ def _save_sentiment_last_known() -> None:
 _load_sentiment_last_known()
 
 # ── Sentiment history (for trend chart) ──────────────────────────────────────
-_SENTIMENT_HISTORY_FILE = BASE / "data" / "sentiment_history.json"
+_SENTIMENT_HISTORY_FILE = cfg.SENTIMENT_HISTORY_PATH
 
 def _load_sentiment_history() -> list:
     try:
@@ -178,7 +159,7 @@ def _save_sentiment_history(history: list) -> None:
     try:
         _SENTIMENT_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
         _SENTIMENT_HISTORY_FILE.write_text(
-            json.dumps(history[-200:], ensure_ascii=False, indent=2),
+            json.dumps(history[-cfg.SENTIMENT_HISTORY_MAX_ENTRIES:], ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
     except Exception:
@@ -309,11 +290,11 @@ def _fetch_52w(ticker: str) -> tuple:
     try:
         symbol = _ticker_to_sina_symbol(ticker)
         api = (
-            f"http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
-            f"CN_MarketData.getKLineData?symbol={symbol}&scale=240&ma=no&datalen=260"
+            f"{cfg.SINA_KLINE_API_URL}"
+            f"?symbol={symbol}&scale=240&ma=no&datalen={cfg.TRADING_DAYS_PER_YEAR}"
         )
         req = urlrequest.Request(api, headers={"User-Agent": "Mozilla/5.0"})
-        with urlrequest.urlopen(req, timeout=8) as resp:
+        with urlrequest.urlopen(req, timeout=cfg.SINA_KLINE_TIMEOUT) as resp:
             raw = resp.read().decode("utf-8", errors="ignore")
 
         data = json.loads(raw)
@@ -360,7 +341,7 @@ def _fetch_stock_yahoo(ticker: str, name: str = "") -> dict:
     try:
         def _query():
             t_local = yf.Ticker(ticker)
-            hist_local = t_local.history(period="2d", timeout=10)
+            hist_local = t_local.history(period=cfg.YAHOO_HISTORY_PERIOD, timeout=cfg.YAHOO_TIMEOUT)
             return t_local, hist_local
 
         t, hist = _with_retries(_query)
@@ -481,7 +462,7 @@ def _fetch_stock_sina(ticker: str, name: str = "") -> dict:
         return {"ticker": ticker, "name": name, "error": "not an A-share ticker"}
 
     symbol = _ticker_to_sina_symbol(ticker)
-    url = f"https://hq.sinajs.cn/list={symbol}"
+    url = f"{cfg.SINA_QUOTE_API_URL}{symbol}"
     req = urlrequest.Request(
         url,
         headers={
@@ -492,7 +473,7 @@ def _fetch_stock_sina(ticker: str, name: str = "") -> dict:
 
     try:
         def _download():
-            with urlrequest.urlopen(req, timeout=10) as resp:
+            with urlrequest.urlopen(req, timeout=cfg.SINA_QUOTE_TIMEOUT) as resp:
                 return resp.read().decode("gbk", errors="ignore")
 
         body = _with_retries(_download)
@@ -763,7 +744,7 @@ def _fetch_market_headlines(limit: int = 5) -> list[str]:
             req = urlrequest.Request(feed, headers={"User-Agent": "Mozilla/5.0"})
 
             def _download():
-                with urlrequest.urlopen(req, timeout=8) as resp:
+                with urlrequest.urlopen(req, timeout=cfg.NEWS_FEED_TIMEOUT) as resp:
                     return resp.read().decode("utf-8", errors="ignore")
 
             xml_text = _with_retries(_download)
@@ -946,12 +927,12 @@ def _evaluate_market_sentiment(
 
 def _fetch_iwencai_count(keyword: str, pattern: str) -> int | None:
     """Fetch count from iWenCai page text using a regex pattern with one capture group."""
-    url = f"https://www.iwencai.com/unifiedwap/result?w={urlparse.quote(keyword)}"
+    url = f"{cfg.IWENCAI_URL}?w={urlparse.quote(keyword)}"
     req = urlrequest.Request(url, headers={"User-Agent": "Mozilla/5.0"})
 
     try:
         def _download():
-            with urlrequest.urlopen(req, timeout=10) as resp:
+            with urlrequest.urlopen(req, timeout=cfg.IWENCAI_TIMEOUT) as resp:
                 return resp.read().decode("utf-8", errors="ignore")
 
         text = _with_retries(_download)
@@ -1236,11 +1217,11 @@ def _fetch_history_closes(ticker: str, days: int) -> list[float]:
     try:
         symbol = _ticker_to_sina_symbol(ticker)
         api = (
-            f"http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
-            f"CN_MarketData.getKLineData?symbol={symbol}&scale=240&ma=no&datalen={days}"
+            f"{cfg.SINA_KLINE_API_URL}"
+            f"?symbol={symbol}&scale=240&ma=no&datalen={days}"
         )
         req = urlrequest.Request(api, headers={"User-Agent": "Mozilla/5.0"})
-        with urlrequest.urlopen(req, timeout=8) as resp:
+        with urlrequest.urlopen(req, timeout=cfg.SINA_KLINE_TIMEOUT) as resp:
             raw = resp.read().decode("utf-8", errors="ignore")
         data = json.loads(raw)
         if not data:
