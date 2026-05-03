@@ -7,6 +7,7 @@ import time
 
 from urllib import request as urlrequest
 
+from config import cfg
 from time_utils import BeijingTime
 from providers import with_retries, fetch_stock
 
@@ -15,11 +16,8 @@ try:
 except Exception:
     ak = None
 
-# ── Constants ─────────────────────────────────────────────────────────────────
-NEWS_FEEDS = [
-    "https://finance.yahoo.com/news/rssindex",
-    "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
-]
+# ── Constants (from config) ───────────────────────────────────────────────────
+NEWS_FEEDS = cfg.NEWS_FEEDS
 
 GLOSSARY = {
     "cpi": "CPI 就是居民消费价格指数。你可以把它理解成'日常买菜、房租、交通'这类生活成本的温度计。",
@@ -36,7 +34,7 @@ GLOSSARY = {
 # ── Stocks snapshot cache ─────────────────────────────────────────────────────
 STOCKS_CACHE_DATA = None
 STOCKS_CACHE_TS = 0.0
-STOCKS_CACHE_TTL_SECONDS = 600
+STOCKS_CACHE_TTL_SECONDS = cfg.STOCKS_CACHE_TTL_SECONDS
 
 
 def invalidate_stocks_cache() -> None:
@@ -66,7 +64,7 @@ def get_stocks_snapshot(load_watchlist_fn, force_refresh: bool = False) -> list[
 # ── Limit stats ──────────────────────────────────────────────────────────────
 _LIMIT_STATS_CACHE: dict | None = None
 _LIMIT_STATS_CACHE_TS: float = 0.0
-_LIMIT_STATS_CACHE_TTL = 300  # 5 min
+_LIMIT_STATS_CACHE_TTL = cfg.LIMIT_STATS_CACHE_TTL_SECONDS
 
 
 def get_limit_stats() -> dict:
@@ -129,8 +127,8 @@ def get_limit_stats() -> dict:
                     "total": total, "up": up, "down": down, "flat": flat,
                     "avg_change_pct": avg_chg, "profit_rate": profit_rate,
                     "verdict": (
-                        "短线接力环境好" if profit_rate >= 60 and avg_chg > 1
-                        else "短线环境中性" if profit_rate >= 40
+                        "短线接力环境好" if profit_rate >= cfg.PROFIT_RATE_GOOD_THRESHOLD and avg_chg > 1
+                        else "短线环境中性" if profit_rate >= cfg.PROFIT_RATE_NEUTRAL_THRESHOLD
                         else "短线周期走弱，谨慎追高"
                     ),
                 }
@@ -144,7 +142,7 @@ def get_limit_stats() -> dict:
 
 # ── Sparkline history cache ──────────────────────────────────────────────────
 _HISTORY_CACHE: dict = {}
-_HISTORY_CACHE_TTL = 3600
+_HISTORY_CACHE_TTL = cfg.HISTORY_CACHE_TTL_SECONDS
 
 
 def get_history(ticker: str, days: int) -> dict:
@@ -174,7 +172,7 @@ def quickread_news(text: str) -> dict:
         return {"ok": False, "msg": "请输入新闻或财报内容"}
 
     lower = t.lower()
-    summary = t[:180] + ("..." if len(t) > 180 else "")
+    summary = t[:cfg.NEWS_SUMMARY_MAX_LENGTH] + ("..." if len(t) > cfg.NEWS_SUMMARY_MAX_LENGTH else "")
     tags = []
     score = 0
 
@@ -270,7 +268,7 @@ def macro_impact(indicator: str, current: float | None, previous: float | None) 
     }
 
 
-def _fetch_market_headlines(limit: int = 5) -> list[str]:
+def _fetch_market_headlines(limit: int = cfg.NEWS_HEADLINE_LIMIT) -> list[str]:
     headlines = []
     seen = set()
 
@@ -279,7 +277,7 @@ def _fetch_market_headlines(limit: int = 5) -> list[str]:
             req = urlrequest.Request(feed, headers={"User-Agent": "Mozilla/5.0"})
 
             def _download():
-                with urlrequest.urlopen(req, timeout=8) as resp:
+                with urlrequest.urlopen(req, timeout=cfg.NEWS_FEED_TIMEOUT) as resp:
                     return resp.read().decode("utf-8", errors="ignore")
 
             xml_text = with_retries(_download)

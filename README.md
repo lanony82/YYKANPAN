@@ -34,6 +34,7 @@ python src/server.py
 
 ```
 src/
+  config.py           集中配置（环境变量覆盖）
   server.py           Flask 后端 + API
   providers.py        数据源（AkShare/Sina/Yahoo）
   sentiment.py        情绪判断引擎
@@ -53,6 +54,7 @@ docker/
   docker-entrypoint.sh  启动脚本（cron + gunicorn）
 tests/
   smoke_test.py       回归测试（7项）
+.env.example          环境变量说明文件
 ```
 
 ## API 端点
@@ -114,6 +116,19 @@ python tests/smoke_test.py            # 7 项回归测试
 - 前端: 原生 JS + CSS（无框架）
 - 存储: localStorage（持仓/配置）+ CSV + JSON
 - 时区: UTC+8 全链路
+
+## 配置
+
+所有参数通过 `src/config.py` 集中管理，支持 `FUN_*` 环境变量覆盖：
+
+```bash
+# 示例：修改端口和缓存时间
+FUN_PORT=8080
+FUN_STOCKS_CACHE_TTL=300
+FUN_SINA_KLINE_TIMEOUT=12
+```
+
+完整变量列表见 `.env.example`。复制为 `.env` 即可使用。
 
 ## .gitignore
 

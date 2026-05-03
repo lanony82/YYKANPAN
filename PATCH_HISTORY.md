@@ -397,3 +397,24 @@ Copy this template for each new patch:
   - Smoke test `test_auto_endpoints_return_json` asserted `"ok" in data` for all auto endpoints but `/api/limit-stats` never included it.
 - Validation:
   - Smoke regression test passed (7 tests, OK).
+
+## 2026-05-03
+
+### 29. Config decoupling — centralized configuration module
+- File: src/config.py (new), src/providers.py, src/sentiment.py, src/analysis.py, src/server.py, .env.example (new)
+- Type: Refactor
+- Summary:
+  - Created `src/config.py` with a `_Config` class exposing all tunable parameters.
+  - All values overridable via `FUN_*` environment variables (e.g. `FUN_PORT`, `FUN_SINA_KLINE_TIMEOUT`).
+  - Updated `providers.py`: URLs, timeouts, cache TTLs, retry settings now read from `cfg`.
+  - Updated `sentiment.py`: file paths, thresholds, defaults, iwencai timeout from `cfg`.
+  - Updated `analysis.py`: NEWS_FEEDS, cache TTLs, profit thresholds, limits from `cfg`.
+  - Updated `server.py`: all previously duplicated constants reference `cfg`.
+  - Added `.env.example` documenting every environment variable with its default.
+- Why:
+  - Eliminate ~6 duplicate copies of the same constants across modules.
+  - Allow runtime tuning via environment variables without code changes.
+  - Enable different configurations for dev/docker/production via `.env` file.
+- Validation:
+  - All four modules import cleanly: `from config import cfg` succeeds.
+  - Server starts without errors on port 5000.
