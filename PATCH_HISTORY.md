@@ -418,3 +418,60 @@ Copy this template for each new patch:
 - Validation:
   - All four modules import cleanly: `from config import cfg` succeeds.
   - Server starts without errors on port 5000.
+
+## 🎉 V2 Release — 2026-05-08
+
+### 30. Petite-Vue reactive store integration
+- File: static/index.html, static/js/app.js, PETITE_VUE_MIGRATION.md
+- Type: Improvement
+- Summary:
+  - Introduced petite-vue 0.4.1 CDN and global reactive `store`.
+  - Existing vanilla JS writes data into store for reactive UI binding.
+  - Created migration guide for phased declarative-binding adoption.
+
+### 31. Sticky header with page-head wrapper
+- File: static/index.html, static/css/style.css
+- Type: Improvement
+- Summary:
+  - Wrapped `<header>`, `.add-bar`, `.layout-bar` inside `<div class="page-head">`.
+  - `page-head` uses `position: sticky; top: 0; z-index: 100` so controls stay visible on scroll.
+  - Moved `position: sticky` from `header` to `.page-head`.
+
+### 32. Layout bar reorganization + scroll-to-stocks button
+- File: static/index.html, static/css/style.css, static/js/app.js
+- Type: Improvement
+- Summary:
+  - Moved fold/hide buttons into `<span class="layout-bar-right">` with `margin-left: auto`.
+  - Added 📊 button that smooth-scrolls to the stock card section.
+  - Added `scroll-margin-top: 120px` on `.stock-section` to clear sticky header.
+  - Removed stale `.active` class toggle from sync function.
+
+### 33. CSV timeout fallback for live fetch
+- File: src/server.py, src/config.py
+- Type: Fix
+- Summary:
+  - `_get_stocks_snapshot()` now runs live fetch in a daemon thread with 30s timeout.
+  - If timeout expires, falls back to latest CSV file, then placeholder data.
+  - Timeout configurable via `FUN_LIVE_FETCH_TIMEOUT` env var (default 30).
+
+### 34. Sentiment non-trading fallback
+- File: src/server.py
+- Type: Fix
+- Summary:
+  - `/api/market-sentiment-auto` now falls back to `sentiment_history.json` when off-hours and live data has missing values.
+  - Returns last history entry with "休市中，显示最近交易日数据" message.
+
+### 35. P1 test suite — trading session and snapshot tests
+- File: tests/test_server_trading.py
+- Type: Improvement
+- Summary:
+  - TestIsCnTradingSession: weekend, holiday, within/at/before/after hours, Labor Day, National Day.
+  - TestGetStocksSnapshot: cache hit, off-hours CSV, off-hours no CSV, trading-hours fetch, force refresh.
+  - TestDoubleCheckedLocking: concurrent requests trigger single scan.
+
+### 36. Docker and config decoupling
+- File: docker/Dockerfile, docker/docker-entrypoint.sh, docker-compose.yml, src/config.py
+- Type: Improvement
+- Summary:
+  - Added Docker support with Dockerfile, entrypoint script, and docker-compose.
+  - Centralized all tunable parameters in `src/config.py` with `FUN_*` env var overrides.

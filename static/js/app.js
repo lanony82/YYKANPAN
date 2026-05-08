@@ -99,7 +99,7 @@ const I = {
   card_stats: "行情概览", card_ai_edge: "AI 策略引擎",
   card_watchdog: "Watchdog", card_limit: "涨跌停",
   card_sentiment: "情绪判断", card_mainline: "主线板块",
-  card_brief: "智能简报",
+  card_brief: "智能简报", card_invest_tip: "投资锦囊",
 
   // Misc
   lbl_hidden: "已隐藏：",
@@ -118,6 +118,90 @@ const I = {
   store_brief_default: "系统每30分钟自动更新一次，你也可以手动刷新",
   store_sentiment_default: "输入上涨/下跌/涨停/连板数据后点击判断",
 };
+// ── Card Template ─────────────────────────────────────────────────────────────
+// Usage:
+//   const card = CardTemplate.create("my-card", "卡片标题", {
+//     badge: "可选标签",            // small accent badge next to title
+//     bodyHTML: "<p>内容</p>",      // innerHTML for card body
+//     buttons: [                    // optional action buttons
+//       { id: "btn-xxx", text: "刷新" }
+//     ],
+//     output: { id: "out-xxx", text: "默认提示文字" },  // .insight-out div
+//     noClose: false,               // true = hide ✕ button
+//     noDrag: false,                // true = hide drag handle
+//   });
+//   document.getElementById("insight-wrap").appendChild(card);
+//
+// The returned element is a standard .insight-card with data-card-id,
+// drag handle, collapse & close buttons — identical to hand-written cards.
+const CardTemplate = {
+  create(id, title, opts = {}) {
+    const el = document.createElement("div");
+    el.className = "insight-card";
+    el.dataset.cardId = id;
+    if (!opts.noDrag) el.draggable = true;
+
+    // -- header
+    const h3 = document.createElement("h3");
+    if (!opts.noDrag) {
+      const handle = document.createElement("span");
+      handle.className = "drag-handle";
+      handle.textContent = "⠇";
+      h3.appendChild(handle);
+    }
+    h3.appendChild(document.createTextNode(" " + title + " "));
+    if (opts.badge) {
+      const badge = document.createElement("span");
+      badge.className = "ai-badge";
+      badge.textContent = opts.badge;
+      h3.appendChild(badge);
+    }
+    const colBtn = document.createElement("button");
+    colBtn.className = "card-collapse";
+    colBtn.title = "折叠/展开";
+    colBtn.textContent = "−";
+    h3.appendChild(colBtn);
+    if (!opts.noClose) {
+      const closeBtn = document.createElement("button");
+      closeBtn.className = "card-close";
+      closeBtn.title = "隐藏卡片";
+      closeBtn.textContent = "✕";
+      h3.appendChild(closeBtn);
+    }
+    el.appendChild(h3);
+
+    // -- buttons
+    if (opts.buttons) {
+      opts.buttons.forEach(b => {
+        const btn = document.createElement("button");
+        btn.id = b.id;
+        if (b.className) btn.className = b.className;
+        btn.textContent = b.text;
+        if (b.style) btn.style.cssText = b.style;
+        el.appendChild(btn);
+      });
+    }
+
+    // -- body
+    if (opts.bodyHTML) {
+      const body = document.createElement("div");
+      body.innerHTML = opts.bodyHTML;
+      el.appendChild(body);
+    }
+
+    // -- output
+    if (opts.output) {
+      const out = document.createElement("div");
+      out.className = "insight-out";
+      out.id = opts.output.id;
+      out.textContent = opts.output.text || "";
+      el.appendChild(out);
+    }
+
+    return el;
+  }
+};
+
 // ── Petite-Vue global reactive store ─────────────────────────────────────────
 // Phase 1: All existing vanilla JS continues to work.
 // New/migrated components can read from this reactive store.
@@ -557,8 +641,8 @@ async function loadStocks() {
     document.getElementById("last-update").textContent = I.lbl_update_prefix + beijingTimestampLabel();
     runWatchdog();
   } catch(e) {
-    document.getElementById("tbody").innerHTML =
-      `<tr><td colspan="15" class="empty"><big>⚠️</big>${I.err_load_failed}</td></tr>`;
+    document.getElementById("stock-cards").innerHTML =
+      `<div class="stock-cards-empty"><big>⚠️</big>${I.err_load_failed}</div>`;
   } finally {
     progress(100);
     btn.classList.remove("spinning");
@@ -661,21 +745,25 @@ function render() {
 
   const allRows = [...data, ...errData];
   if (!allRows.length) {
-    document.getElementById("tbody").innerHTML =
-      `<tr><td colspan="15" class="empty"><big>📋</big>${I.empty_no_stocks}</td></tr>`;
+    document.getElementById("stock-cards").innerHTML =
+      `<div class="stock-cards-empty"><big>📋</big>${I.empty_no_stocks}</div>`;
     return;
   }
 
-  document.getElementById("tbody").innerHTML = allRows.map(s => {
+  document.getElementById("stock-cards").innerHTML = allRows.map(s => {
     if (s.error) return `
-      <tr class="error-row">
-        <td class="ticker-cell">${s.ticker}</td>
-        <td>${s.name||"—"}</td>
-        <td colspan="12" style="color:var(--muted)">${s.error}</td>
-        <td style="text-align:center">
-          <button class="del-btn" onclick="removeStock('${s.ticker}')">${I.btn_delete}</button>
-        </td>
-      </tr>`;
+      <div class="stock-card error-card">
+        <div class="stock-card-header">
+          <div class="sc-left">
+            <span class="sc-ticker">${s.ticker}</span>
+            <span class="sc-name">${s.name||"—"}</span>
+          </div>
+          <div class="sc-right">
+            <button class="del-btn" onclick="removeStock('${s.ticker}')">${I.btn_delete}</button>
+          </div>
+        </div>
+        <div class="sc-error">${s.error}</div>
+      </div>`;
 
     const p = getPosition(s.ticker);
     const shares = p.shares;
@@ -689,29 +777,39 @@ function render() {
     const pct = s.change_pct == null ? "—" : `${sgn}${fmtNum(s.change_pct,2)}%`;
     const chg = s.change == null    ? "—" : `${sgn}${fmtNum(s.change,2)}`;
 
-    return `<tr>
-      <td class="ticker-cell">${s.ticker}</td>
-      <td class="name-cell" title="${s.name}">${s.name||"—"}</td>
-      <td class="price-cell ${c}">${fmtNum(s.price,2)}</td>
-      <td><span class="badge ${c}">${pct}</span></td>
-      <td class="${c}">${chg}</td>
-      <td class="spark-cell" id="spark-${s.ticker.replace('.','_')}"></td>
-      <td>${fmtNum(s.prev_close,2)}</td>
-      <td>${fmtVol(s.volume)}</td>
-      <td>${fmtNum(s.high52,2)}</td>
-      <td>${fmtNum(s.low52,2)}</td>
-      <td class="priv">${privacyHidden ? MASK : (shares ?? "—")}</td>
-      <td class="priv">${privacyHidden ? MASK : (cost ? fmtNum(cost,2) : "—")}</td>
-      <td class="priv ${pnl == null ? "flat" : cls(pnl)}">${privacyHidden ? MASK : (pnl == null ? "—" : `${pnl >= 0 ? "+" : ""}${fmtMoney(pnl)}`)}</td>
-      <td class="priv ${pnlPct == null ? "flat" : cls(pnlPct)}">${privacyHidden ? MASK : (pnlPct == null ? "—" : `${pnlPct >= 0 ? "+" : ""}${fmtNum(pnlPct,2)}%`)}</td>
-      <td style="text-align:center">
+    return `<div class="stock-card">
+      <div class="stock-card-header">
+        <div class="sc-left">
+          <span class="sc-ticker">${s.ticker}</span>
+          <span class="sc-name" title="${s.name}">${s.name||"—"}</span>
+        </div>
+        <div class="sc-right">
+          <span class="badge ${c}">${pct}</span>
+        </div>
+      </div>
+      <div class="stock-card-price">
+        <span class="sc-price ${c}">${fmtNum(s.price,2)}</span>
+        <span class="sc-change ${c}">${chg}</span>
+      </div>
+      <div class="stock-card-spark" id="spark-${s.ticker.replace('.','_')}"></div>
+      <div class="stock-card-grid">
+        <div class="sc-field"><span class="sc-label">昨收</span><span>${fmtNum(s.prev_close,2)}</span></div>
+        <div class="sc-field"><span class="sc-label">成交量</span><span>${fmtVol(s.volume)}</span></div>
+        <div class="sc-field"><span class="sc-label">52周高</span><span>${fmtNum(s.high52,2)}</span></div>
+        <div class="sc-field"><span class="sc-label">52周低</span><span>${fmtNum(s.low52,2)}</span></div>
+        <div class="sc-field priv"><span class="sc-label">持仓</span><span>${privacyHidden ? MASK : (shares ?? "—")}</span></div>
+        <div class="sc-field priv"><span class="sc-label">成本</span><span>${privacyHidden ? MASK : (cost ? fmtNum(cost,2) : "—")}</span></div>
+        <div class="sc-field priv"><span class="sc-label">浮盈亏</span><span class="${pnl == null ? "flat" : cls(pnl)}">${privacyHidden ? MASK : (pnl == null ? "—" : `${pnl >= 0 ? "+" : ""}${fmtMoney(pnl)}`)}</span></div>
+        <div class="sc-field priv"><span class="sc-label">浮盈亏%</span><span class="${pnlPct == null ? "flat" : cls(pnlPct)}">${privacyHidden ? MASK : (pnlPct == null ? "—" : `${pnlPct >= 0 ? "+" : ""}${fmtNum(pnlPct,2)}%`)}</span></div>
+      </div>
+      <div class="stock-card-actions">
         <button class="del-btn" onclick="editPosition('${s.ticker}')">${I.btn_position}</button>
         <button class="del-btn" onclick="removeStock('${s.ticker}')">${I.btn_delete}</button>
-      </td>
-    </tr>`;
+      </div>
+    </div>`;
   }).join("");
 
-  // Load sparklines asynchronously after table render
+  // Load sparklines asynchronously after card render
   loadSparklines(allRows.filter(r => !r.error));
 }
 
@@ -761,17 +859,7 @@ function renderSparkSVG(closes, changePct) {
   </svg>`;
 }
 
-// ── Sort ──────────────────────────────────────────────────────────────────────
-document.querySelectorAll("thead th[data-col]").forEach(th => {
-  th.addEventListener("click", () => {
-    const col = th.dataset.col;
-    if (sortCol === col) sortDir *= -1;
-    else { sortCol = col; sortDir = -1; }
-    document.querySelectorAll("thead th").forEach(t => t.classList.remove("sort-asc","sort-desc"));
-    th.classList.add(sortDir === 1 ? "sort-asc" : "sort-desc");
-    render();
-  });
-});
+// ── Sort (no-op: table headers removed, sorting still works internally) ──────
 
 // ── Add stock ─────────────────────────────────────────────────────────────────
 document.getElementById("btn-add").addEventListener("click", addStock);
@@ -918,6 +1006,91 @@ document.getElementById("btn-color-mode").addEventListener("click", () => {
   applyColorMode(mode);
   render();
 });
+
+// ── Investment Tips (投资锦囊) ─────────────────────────────────────────────────
+const INVEST_TIPS = [
+  { text: "止损不犹豫，止盈不贪婪。", source: "交易纪律" },
+  { text: "不要把鸡蛋放在一个篮子里——分散投资降低风险。", source: "投资格言" },
+  { text: "买入靠信心，持有靠耐心，卖出靠决心。", source: "交易心法" },
+  { text: "市场短期是投票器，长期是称重机。", source: "本杰明·格雷厄姆" },
+  { text: "别人恐惧时我贪婪，别人贪婪时我恐惧。", source: "沃伦·巴菲特" },
+  { text: "永远不要用你输不起的钱去投资。", source: "投资铁律" },
+  { text: "趋势是你的朋友，直到它结束。", source: "技术分析" },
+  { text: "量价齐升看多，量价背离小心。", source: "量价关系" },
+  { text: "利好出尽是利空，利空出尽是利好。", source: "A股谚语" },
+  { text: "牛市不言顶，熊市不言底。", source: "市场规律" },
+  { text: "会买的是徒弟，会卖的是师傅，会空仓的是祖师爷。", source: "A股老话" },
+  { text: "不懂的股票不要买，看不懂的行情不要做。", source: "风险控制" },
+  { text: "追涨杀跌是散户亏钱的主要原因。", source: "交易反思" },
+  { text: "成交量是股票的元气，量在价先。", source: "量价理论" },
+  { text: "投资最重要的事：不要亏钱；第二重要的事：记住第一条。", source: "沃伦·巴菲特" },
+  { text: "计划你的交易，交易你的计划。", source: "交易纪律" },
+  { text: "均线多头排列看多，空头排列看空。", source: "均线理论" },
+  { text: "底部放量是启动信号，顶部放量是出货信号。", source: "量价分析" },
+  { text: "大盘好时选强势股，大盘差时空仓观望。", source: "仓位管理" },
+  { text: "做投资要像经营企业一样，关注 ROE、现金流和护城河。", source: "价值投资" },
+  { text: "短线看量能和情绪，中线看趋势和板块，长线看业绩和估值。", source: "操作框架" },
+  { text: "永远保留一部分现金，机会来了才能上车。", source: "仓位管理" },
+  { text: "不要频繁交易，手续费和滑点会吞噬利润。", source: "交易成本" },
+  { text: "MACD金叉买入，死叉卖出——但要结合大趋势判断。", source: "MACD 指标" },
+  { text: "3000点以下多一份勇敢，5000点以上多一份谨慎。", source: "A股经验" },
+  { text: "连续涨停板不追，连续跌停板不抄。", source: "风险控制" },
+  { text: "研究公司基本面比猜明天涨跌更有价值。", source: "价值投资" },
+  { text: "情绪冰点往往是最好的布局时机。", source: "情绪周期" },
+  { text: "政策底 → 市场底 → 经济底，依次出现。", source: "A股规律" },
+  { text: "复利是世界第八大奇迹——长期持有好公司。", source: "阿尔伯特·爱因斯坦" },
+  { text: "板块轮动是A股的常态，跟着资金走。", source: "板块轮动" },
+  { text: "KDJ 超买不一定跌，超卖不一定涨——趋势中指标会钝化。", source: "KDJ 指标" },
+  { text: "风险管理 > 收益追求。先想能亏多少，再想能赚多少。", source: "风险优先" },
+  { text: "市场永远是对的，错的只有自己。", source: "杰西·利弗莫尔" },
+  { text: "一根大阳线改变信仰，但别被情绪带着走。", source: "A股现象" },
+  { text: "新手看价格，老手看成交量，高手看资金流向。", source: "看盘进阶" },
+  { text: "每次交易前问自己：如果反向走了怎么办？", source: "交易计划" },
+  { text: "周线定方向，日线找买点。", source: "多周期分析" },
+  { text: "高股息策略在震荡市和熊市中表现更优。", source: "红利策略" },
+  { text: "投资是认知的变现，亏损是认知的罚单。", source: "投资哲学" },
+];
+let _tipShown = -1;
+function showRandomTip() {
+  const tips = INVEST_TIPS;
+  let idx;
+  do { idx = Math.floor(Math.random() * tips.length); } while (idx === _tipShown && tips.length > 1);
+  _tipShown = idx;
+  const t = tips[idx];
+  document.getElementById("tip-text").textContent = `"${t.text}"`;
+  document.getElementById("tip-source").textContent = `—— ${t.source}`;
+}
+document.getElementById("btn-lucky-tip").addEventListener("click", showRandomTip);
+showRandomTip();
+
+// ── Stock section collapse ────────────────────────────────────────────────────
+(function() {
+  const KEY = "stocks_collapsed";
+  const section = document.querySelector(".stock-section");
+  const btn = document.getElementById("btn-stocks-collapse");
+  const toggleBtn = document.getElementById("btn-toggle-stocks");
+  if (!section || !btn) return;
+
+  function sync(collapsed) {
+    btn.textContent = collapsed ? "+" : "−";
+    localStorage.setItem(KEY, collapsed ? "1" : "0");
+  }
+
+  function toggle() {
+    const collapsed = section.classList.toggle("collapsed");
+    sync(collapsed);
+  }
+
+  btn.addEventListener("click", toggle);
+  if (toggleBtn) toggleBtn.addEventListener("click", () => {
+    section.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+
+  if (localStorage.getItem(KEY) === "1") {
+    section.classList.add("collapsed");
+    sync(true);
+  }
+})();
 
 // ── Insight tools ─────────────────────────────────────────────────────────────
 
@@ -1494,7 +1667,7 @@ loadWatchdogConfig();
   const CARD_NAMES = {
     stats: I.card_stats, "ai-edge": I.card_ai_edge, watchdog: I.card_watchdog,
     "limit-stats": I.card_limit, sentiment: I.card_sentiment,
-    mainline: I.card_mainline, brief: I.card_brief
+    mainline: I.card_mainline, brief: I.card_brief, "invest-tip": I.card_invest_tip
   };
   const wrap = document.getElementById("insight-wrap");
   const bar = document.getElementById("restore-bar");
@@ -1544,6 +1717,28 @@ loadWatchdogConfig();
       if (card) hideCard(card.dataset.cardId);
     });
   });
+
+  // Hide/show all toggle
+  let allHidden = false;
+  const hideAllBtn = document.getElementById("btn-hide-all");
+  hideAllBtn.addEventListener("click", () => {
+    const cards = wrap.querySelectorAll(".insight-card");
+    allHidden = !allHidden;
+    if (allHidden) {
+      cards.forEach(c => hideCard(c.dataset.cardId));
+      hideAllBtn.textContent = "👁";
+      hideAllBtn.title = "显示全部卡片";
+    } else {
+      const h = [...getHidden()];
+      h.forEach(id => showCard(id));
+      hideAllBtn.textContent = "👁";
+      hideAllBtn.title = "隐藏全部卡片";
+    }
+  });
+
+  // Restore hidden cards on load
+  getHidden().forEach(id => hideCard(id));
+  renderBar();
 
   // ── Card collapse/expand ────────────────────────────────────────────────
   const COLLAPSE_KEY = "card_collapsed_v1";
@@ -1645,10 +1840,13 @@ loadWatchdogConfig();
 applyColorMode(localStorage.getItem("color_mode") || "cn");
 applyPrivacyMode();
 updateAutoRefreshStatus();
-loadStocks();
-generateAutoBrief(false);
-refreshMarketSentimentAuto();
-loadSentimentChart();
-refreshMainlineAuto();
-refreshAiEdge(false);
-refreshLimitStats();
+
+// Load watchlist stocks first, then kick off heavier market-wide endpoints
+loadStocks().then(() => {
+  generateAutoBrief(false);
+  refreshMarketSentimentAuto();
+  loadSentimentChart();
+  refreshMainlineAuto();
+  refreshAiEdge(false);
+  refreshLimitStats();
+});

@@ -11,10 +11,12 @@ from flask import Flask, jsonify, request, send_from_directory, abort
 import yfinance as yf
 import pathlib
 import json
+import csv
 import time
 import re
 import os
 import logging
+import threading
 from datetime import datetime
 from urllib import request as urlrequest
 from urllib import parse as urlparse
@@ -312,11 +314,112 @@ def _fetch_52w(ticker: str) -> tuple:
         return None, None
 
 
+# ── Market-hours & CSV persistence ────────────────────────────────────────────
+# Chinese A-share market holidays 2026 (weekends handled separately).
+_CN_HOLIDAYS_2026 = {
+    "2026-01-01", "2026-01-02",
+    "2026-01-26", "2026-01-27", "2026-01-28", "2026-01-29", "2026-01-30",
+    "2026-02-02", "2026-02-03", "2026-02-04", "2026-02-05", "2026-02-06",
+    "2026-04-04", "2026-04-05", "2026-04-06",
+    "2026-05-01", "2026-05-02", "2026-05-03", "2026-05-04", "2026-05-05",
+    "2026-06-19", "2026-06-20", "2026-06-21",
+    "2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04", "2026-10-05",
+    "2026-10-06", "2026-10-07", "2026-10-08",
+}
+
+_CSV_FIELDS = [
+    "ticker", "name", "price", "prev_close", "change", "change_pct",
+    "volume", "market_cap", "high52", "low52", "date", "source", "error",
+]
+_CSV_KEEP_DAYS = 5
+
+
+def _is_cn_trading_session() -> bool:
+    """True when Beijing time is within A-share continuous trading window
+    on a trading day (weekday + non-holiday), roughly 09:15–15:30 UTC+8."""
+    now = _bj_now()
+    dow = now.weekday()  # Mon=0 .. Sun=6
+    if dow >= 5:
+        return False
+    if now.strftime("%Y-%m-%d") in _CN_HOLIDAYS_2026:
+        return False
+    minutes = now.hour * 60 + now.minute
+    return (9 * 60 + 15) <= minutes <= (15 * 60 + 30)
+
+
+def _save_stocks_csv(data: list[dict]) -> None:
+    """Persist the latest successful snapshot to data/YYYY-MM-DD.csv."""
+    valid = [r for r in data if not r.get("error")]
+    if not valid:
+        return
+    data_dir = cfg.DATA_DIR
+    data_dir.mkdir(parents=True, exist_ok=True)
+    out_file = data_dir / f"{_bj_date_str()}.csv"
+    try:
+        with open(out_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=_CSV_FIELDS, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(data)
+        # Cleanup old files
+        csv_files = sorted(
+            [p for p in data_dir.glob("*.csv") if len(p.stem) == 10],
+            key=lambda p: p.stem, reverse=True,
+        )
+        for old in csv_files[_CSV_KEEP_DAYS:]:
+            old.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _load_latest_csv() -> list[dict] | None:
+    """Load the most recent daily CSV from data/. Returns None if unavailable."""
+    data_dir = cfg.DATA_DIR
+    if not data_dir.exists():
+        return None
+    csv_files = sorted(
+        [p for p in data_dir.glob("*.csv") if len(p.stem) == 10],
+        key=lambda p: p.stem, reverse=True,
+    )
+    if not csv_files:
+        return None
+    try:
+        with open(csv_files[0], newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            rows = []
+            for row in reader:
+                # Convert numeric fields back from strings
+                for k in ("price", "prev_close", "change", "change_pct", "high52", "low52"):
+                    if row.get(k):
+                        try:
+                            row[k] = float(row[k])
+                        except (ValueError, TypeError):
+                            row[k] = None
+                    else:
+                        row[k] = None
+                for k in ("volume", "market_cap"):
+                    if row.get(k):
+                        try:
+                            row[k] = int(float(row[k]))
+                        except (ValueError, TypeError):
+                            row[k] = None
+                    else:
+                        row[k] = None
+                # Normalize empty error to None
+                if not row.get("error"):
+                    row["error"] = None
+                rows.append(row)
+        return rows if rows else None
+    except Exception:
+        return None
+
+
 def _invalidate_stocks_cache() -> None:
     global STOCKS_CACHE_DATA, STOCKS_CACHE_TS
     STOCKS_CACHE_DATA = None
     STOCKS_CACHE_TS = 0.0
 
+
+_stocks_lock = threading.Lock()
 
 def _get_stocks_snapshot(force_refresh: bool = False) -> list[dict]:
     global STOCKS_CACHE_DATA, STOCKS_CACHE_TS
@@ -329,11 +432,75 @@ def _get_stocks_snapshot(force_refresh: bool = False) -> list[dict]:
     ):
         return STOCKS_CACHE_DATA
 
-    wl = load_watchlist()
-    data = [fetch_stock(s["ticker"], s.get("name", "")) for s in wl]
-    STOCKS_CACHE_DATA = data
-    STOCKS_CACHE_TS = now
-    return data
+    # Serialize heavy fetches so only one thread scans at a time
+    with _stocks_lock:
+        # Double-check after acquiring lock
+        now = time.time()
+        if (
+            not force_refresh
+            and STOCKS_CACHE_DATA is not None
+            and (now - STOCKS_CACHE_TS) <= STOCKS_CACHE_TTL_SECONDS
+        ):
+            return STOCKS_CACHE_DATA
+
+        # Outside trading hours → serve last saved CSV (avoids slow/empty fetches)
+        if not _is_cn_trading_session():
+            cached_csv = _load_latest_csv()
+            if cached_csv:
+                STOCKS_CACHE_DATA = cached_csv
+                STOCKS_CACHE_TS = now
+                return STOCKS_CACHE_DATA
+            # No CSV available — return watchlist placeholders instead of blocking
+            wl = load_watchlist()
+            STOCKS_CACHE_DATA = [
+                {"ticker": s["ticker"], "name": s.get("name", s["ticker"]),
+                 "price": None, "prev_close": None, "change": None,
+                 "change_pct": None, "volume": None, "high52": None,
+                 "low52": None, "market_cap": None, "date": None,
+                 "source": "offline", "error": "休市中，暂无历史数据"}
+                for s in wl
+            ]
+            STOCKS_CACHE_TS = now
+            return STOCKS_CACHE_DATA
+
+        wl = load_watchlist()
+
+        # Run live fetch in a background thread with a 30-second timeout.
+        # If it doesn't finish in time, fall back to the latest CSV.
+        fetch_result = [None]
+
+        def _do_fetch():
+            fetch_result[0] = [fetch_stock(s["ticker"], s.get("name", "")) for s in wl]
+
+        t = threading.Thread(target=_do_fetch, daemon=True)
+        t.start()
+        t.join(timeout=cfg.LIVE_FETCH_TIMEOUT_SECONDS)
+
+        if fetch_result[0] is not None:
+            data = fetch_result[0]
+            STOCKS_CACHE_DATA = data
+            STOCKS_CACHE_TS = now
+            _save_stocks_csv(data)
+            return data
+
+        # Live fetch timed out — fall back to CSV
+        cached_csv = _load_latest_csv()
+        if cached_csv:
+            STOCKS_CACHE_DATA = cached_csv
+            STOCKS_CACHE_TS = now
+            return STOCKS_CACHE_DATA
+
+        # No CSV either — return placeholders
+        STOCKS_CACHE_DATA = [
+            {"ticker": s["ticker"], "name": s.get("name", s["ticker"]),
+             "price": None, "prev_close": None, "change": None,
+             "change_pct": None, "volume": None, "high52": None,
+             "low52": None, "market_cap": None, "date": None,
+             "source": "offline", "error": "实时数据超时，暂无历史数据"}
+            for s in wl
+        ]
+        STOCKS_CACHE_TS = now
+        return STOCKS_CACHE_DATA
 
 
 def _fetch_stock_yahoo(ticker: str, name: str = "") -> dict:
@@ -946,6 +1113,9 @@ def _fetch_iwencai_count(keyword: str, pattern: str) -> int | None:
 
 def _get_market_sentiment_inputs_auto() -> dict:
     """Auto-fetch four metrics: up/down count, limit-up count, and consecutive-board count."""
+    if not _is_cn_trading_session():
+        return {"up_count": None, "down_count": None,
+                "limit_up_count": None, "consecutive_limit_count": None}
     up_count = _fetch_iwencai_count("上涨家数", r"涨跌幅>0%\s*\((\d+)个\)")
     down_count = _fetch_iwencai_count("下跌家数", r"涨跌幅<0%\s*\((\d+)个\)")
 
@@ -1003,6 +1173,8 @@ def _normalize_code(code: str) -> str:
 def _analyze_mainline_auto() -> dict:
     if ak is None:
         return {"ok": False, "msg": "AkShare 不可用"}
+    if not _is_cn_trading_session():
+        return {"ok": False, "msg": "休市中，暂无实时主线数据"}
 
     date = _bj_yyyymmdd()
     try:
@@ -1284,6 +1456,9 @@ def _get_limit_stats() -> dict:
     if _LIMIT_STATS_CACHE and (now - _LIMIT_STATS_CACHE_TS) < _LIMIT_STATS_CACHE_TTL:
         return _LIMIT_STATS_CACHE
 
+    if not _is_cn_trading_session():
+        return _LIMIT_STATS_CACHE or {"ok": False, "msg": "休市中，暂无实时数据"}
+
     date = _bj_yyyymmdd()
     result: dict = {
         "ok": True,
@@ -1419,6 +1594,23 @@ def market_sentiment_auto():
     metrics, fallback_fields = _merge_with_last_known(metrics_live)
     missing = [k for k, v in metrics.items() if v is None]
     if missing:
+        # During non-trading hours, return last known result if history exists
+        if not _is_cn_trading_session():
+            history = _load_sentiment_history()
+            if history:
+                last = history[-1]
+                return jsonify({
+                    "ok": True,
+                    "stage": last.get("stage", ""),
+                    "tradable": last.get("stage") == "上升",
+                    "tradable_text": "适合交易" if last.get("stage") == "上升" else "暂不适合积极交易",
+                    "metrics": {"score": last.get("score", 0), "up_ratio": last.get("up_ratio")},
+                    "inputs": last.get("inputs", {}),
+                    "reasons": [],
+                    "plain": f"休市中，显示最近交易日数据：情绪处于{last.get('stage', '未知')}阶段",
+                    "fallback_note": f"休市中，数据来自 {last.get('ts', '未知时间')}",
+                    "last_known_updated_at": last.get("ts"),
+                })
         return jsonify({
             "ok": False,
             "msg": f"自动抓取不完整，缺少: {', '.join(missing)}",

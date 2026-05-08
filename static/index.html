@@ -9,6 +9,7 @@
 <body>
 <div id="progress"></div>
 
+<div class="page-head">
 <header>
   <div class="brand">
     <span>A股</span>行情看板
@@ -45,9 +46,13 @@
   <button class="col-btn col-layout" data-cols="2">2</button>
   <button class="col-btn col-layout" data-cols="3">3</button>
   <button class="col-btn col-layout" data-cols="auto" title="自动适应">⭐</button>
-  <span class="lbl" style="margin-left:12px">折叠：</span>
-  <button class="col-btn" id="btn-fold-toggle" title="全部折叠/展开">−</button>
   <span class="restore-bar" id="restore-bar"></span>
+  <span class="layout-bar-right">
+    <button class="col-btn" id="btn-fold-toggle" title="全部折叠/展开">−</button>
+    <button class="col-btn" id="btn-hide-all" title="隐藏/显示全部卡片">👁</button>
+    <button class="col-btn" id="btn-toggle-stocks" title="滚动到持仓卡片">📊</button>
+  </span>
+</div>
 </div>
 
 <!-- Insight tools -->
@@ -165,34 +170,26 @@
     <div class="insight-out" id="out-auto-brief">系统每30分钟自动更新一次，你也可以手动刷新</div>
   </div>
 
+  <div class="insight-card" data-card-id="invest-tip" draggable="true">
+    <h3><span class="drag-handle">⠇</span> 投资锦囊 <span class="ai-badge">每日一悟</span><button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
+    <button id="btn-lucky-tip">🍀 换一条</button>
+    <div class="invest-tip-body" id="out-invest-tip">
+      <div class="tip-text" id="tip-text">加载中…</div>
+      <div class="tip-source" id="tip-source"></div>
+    </div>
+  </div>
+
 </div>
 
-<!-- Table -->
-<div class="table-wrap">
-  <table id="stock-table">
-    <thead>
-      <tr>
-        <th data-col="ticker">代码</th>
-        <th data-col="name">名称</th>
-        <th data-col="price">现价</th>
-        <th data-col="change_pct">涨跌幅</th>
-        <th data-col="change">涨跌额</th>
-        <th>走势</th>
-        <th data-col="prev_close">昨收</th>
-        <th data-col="volume">成交量</th>
-        <th data-col="high52">52周高</th>
-        <th data-col="low52">52周低</th>
-        <th data-col="shares">持仓股数</th>
-        <th data-col="cost">成本价</th>
-        <th data-col="pnl">浮盈亏</th>
-        <th data-col="pnl_pct">浮盈亏%</th>
-        <th>操作</th>
-      </tr>
-    </thead>
-    <tbody id="tbody">
-      <tr><td colspan="15" class="empty"><big>⏳</big>加载中…</td></tr>
-    </tbody>
-  </table>
+<!-- Stock Cards -->
+<div class="stock-section">
+  <h3 class="stock-section-header">
+    <span>📊</span> 我的持仓
+    <button class="card-collapse" id="btn-stocks-collapse" title="折叠/展开">−</button>
+  </h3>
+  <div class="stock-cards" id="stock-cards">
+    <div class="stock-cards-empty"><big>⏳</big>加载中…</div>
+  </div>
 </div>
 
 <script src="https://unpkg.com/petite-vue@0.4.1/dist/petite-vue.iife.js"></script>

@@ -21,6 +21,14 @@ body {
   min-height: 100vh;
 }
 
+/* ── Sticky page head wrapper ── */
+.page-head {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--bg);
+}
+
 /* ── Header ── */
 header {
   background: var(--surface);
@@ -92,6 +100,7 @@ header {
   display: flex; gap: 10px; align-items: center;
   padding: 18px 28px;
   flex-wrap: wrap;
+  background: var(--bg);
 }
 .add-bar input, .add-bar select {
   background: var(--surface); border: 1px solid var(--border);
@@ -187,6 +196,11 @@ header {
 .restore-chip:hover { border-color:var(--accent); color:var(--text); }
 .layout-bar {
   display:flex; align-items:center; gap:6px; padding:0 28px 6px; flex-wrap:wrap;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.layout-bar-right {
+  margin-left:auto; display:flex; gap:6px;
 }
 .layout-bar .lbl { font-size:.78rem; color:var(--muted); }
 .col-btn {
@@ -338,6 +352,28 @@ header {
   white-space: pre-wrap;
 }
 
+/* Investment tip card */
+.invest-tip-body {
+  margin-top: 8px;
+  background: linear-gradient(135deg, #0f1520 0%, #141e2e 100%);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 16px 14px;
+}
+.invest-tip-body .tip-text {
+  font-size: 1.05rem;
+  line-height: 1.7;
+  color: var(--fg);
+  font-style: italic;
+}
+.invest-tip-body .tip-source {
+  margin-top: 8px;
+  font-size: .8rem;
+  color: var(--muted);
+  text-align: right;
+}
+
 .table-wrap {
   padding: 0 28px 40px;
   overflow-x: auto;
@@ -416,6 +452,134 @@ td:nth-child(2) { text-align: left; }
   margin-left: 8px;
 }
 .empty big { display: block; font-size: 2.5rem; margin-bottom: 10px; }
+
+/* ── Stock Cards ── */
+/* Stock section — same layout as insight-wrap */
+.stock-section {
+  padding: 0 28px 40px;
+}
+.stock-section-header {
+  display: flex;
+  align-items: center;
+  font-size: .95rem;
+  font-weight: 600;
+  color: var(--fg);
+  gap: 4px;
+  margin: 0 0 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.stock-section-header .card-collapse {
+  margin-left: auto;
+}
+.stock-section.collapsed > *:not(.stock-section-header) { display: none !important; }
+.stock-section { scroll-margin-top: 120px; }
+.stock-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+}
+.stock-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  overflow: hidden;
+  transition: opacity .2s, box-shadow .2s;
+}
+.stock-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 2px 12px rgba(56,139,253,.12);
+}
+.stock-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.stock-card-header .sc-left {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.stock-card-header .sc-ticker {
+  font-family: monospace;
+  font-size: .85rem;
+  color: var(--accent-h);
+}
+.stock-card-header .sc-name {
+  font-size: 1rem;
+  font-weight: 600;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stock-card-header .sc-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.stock-card-price {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.stock-card-price .sc-price {
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+.stock-card-price .sc-change {
+  font-size: .88rem;
+}
+.stock-card-spark {
+  margin-bottom: 10px;
+  min-height: 32px;
+}
+.stock-card-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 16px;
+  font-size: .82rem;
+}
+.stock-card-grid .sc-field {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(48,54,61,.4);
+}
+.stock-card-grid .sc-field .sc-label {
+  color: var(--muted);
+}
+.stock-card-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.stock-card.error-card {
+  opacity: .7;
+}
+.stock-card.error-card .sc-error {
+  color: var(--muted);
+  font-style: italic;
+  font-size: .85rem;
+}
+.stock-cards-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--muted);
+  font-size: .95rem;
+}
+.stock-cards-empty big {
+  display: block;
+  font-size: 2.5rem;
+  margin-bottom: 10px;
+}
 
 /* progress bar (page load) */
 #progress {

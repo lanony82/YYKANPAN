@@ -25,7 +25,7 @@ def test_defaults_without_env():
     from config import cfg
 
     assert cfg.SERVER_PORT == 5000
-    assert cfg.AK_CACHE_TTL_SECONDS == 20
+    assert cfg.AK_CACHE_TTL_SECONDS == 120
     assert cfg.MAX_FETCH_RETRIES == 2
     assert cfg.SINA_KLINE_TIMEOUT == 8
     assert cfg.YAHOO_TIMEOUT == 10

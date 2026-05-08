@@ -38,7 +38,7 @@ class _Config:
     DEBUG_MODE: bool = _env("FUN_DEBUG", True, bool)
 
     # ── Cache TTLs (seconds) ──────────────────────────────────────────────────
-    AK_CACHE_TTL_SECONDS: int = _env("FUN_AK_CACHE_TTL", 20, int)
+    AK_CACHE_TTL_SECONDS: int = _env("FUN_AK_CACHE_TTL", 120, int)
     STOCKS_CACHE_TTL_SECONDS: int = _env("FUN_STOCKS_CACHE_TTL", 600, int)
     WEEK52_CACHE_TTL_SECONDS: int = _env("FUN_52W_CACHE_TTL", 43200, int)
     HISTORY_CACHE_TTL_SECONDS: int = _env("FUN_HISTORY_CACHE_TTL", 3600, int)
@@ -47,6 +47,7 @@ class _Config:
     # ── Retry ─────────────────────────────────────────────────────────────────
     MAX_FETCH_RETRIES: int = _env("FUN_MAX_RETRIES", 2, int)
     RETRY_BACKOFF_SECONDS: float = _env("FUN_RETRY_BACKOFF", 0.8, float)
+    LIVE_FETCH_TIMEOUT_SECONDS: int = _env("FUN_LIVE_FETCH_TIMEOUT", 30, int)
 
     # ── Timeouts (seconds) ────────────────────────────────────────────────────
     SINA_KLINE_TIMEOUT: int = _env("FUN_SINA_KLINE_TIMEOUT", 8, int)
