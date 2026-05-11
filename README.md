@@ -225,3 +225,8 @@ Before release:
 Common confusion:
 - "No new CSV created today": collector writes one file per date, so same-day runs update existing file.
 - "Old files not archived": retention currently deletes files beyond latest 5 instead of moving them to archive.
+
+## Contact
+
+- WeChat: mapleyyy
+- Email: lanony82@gmail.com

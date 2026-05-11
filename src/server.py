@@ -1992,6 +1992,12 @@ def _scan_risk_events() -> list[dict]:
             _RISK_EVENT_HISTORY.append(e)
             existing_keys.add(key)
 
+    # 4) Trim old events: drop entries older than max_age_days, cap total count
+    cutoff_age = (_bj_now() - timedelta(days=cfg.RISK_EVENT_MAX_AGE_DAYS)).strftime("%Y-%m-%d %H:%M")
+    _RISK_EVENT_HISTORY[:] = [
+        e for e in _RISK_EVENT_HISTORY if e["time"] >= cutoff_age
+    ][-cfg.RISK_EVENT_MAX_ENTRIES:]
+
     return events
 
 

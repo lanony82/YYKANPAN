@@ -77,6 +77,8 @@ class _Config:
 
     # ── Limits ────────────────────────────────────────────────────────────────
     SENTIMENT_HISTORY_MAX_ENTRIES: int = _env("FUN_SENTIMENT_HISTORY_MAX", 200, int)
+    RISK_EVENT_MAX_ENTRIES: int = _env("FUN_RISK_EVENT_MAX", 500, int)
+    RISK_EVENT_MAX_AGE_DAYS: int = _env("FUN_RISK_EVENT_MAX_DAYS", 30, int)
     NEWS_HEADLINE_LIMIT: int = _env("FUN_NEWS_HEADLINE_LIMIT", 5, int)
     NEWS_SUMMARY_MAX_LENGTH: int = _env("FUN_NEWS_SUMMARY_MAX_LEN", 180, int)
     AUTO_BRIEF_HEADLINE_COUNT: int = _env("FUN_BRIEF_HEADLINES", 3, int)
