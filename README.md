@@ -1,4 +1,4 @@
-# 🚀 YYKANPAN（看盘）— A股短线交易助手 V1
+# 🚀 YYKANPAN（看盘）— A股短线交易助手 V2
 
 > 决策辅助系统：帮你判断"今天能不能做"、"资金在去哪里"、"别冲动"
 
@@ -11,8 +11,12 @@
 | **昨日涨停表现** | 胜率 + 平均涨幅 → 短线周期判定 | AkShare |
 | **主线识别** | 板块聚类 + 龙头股 + 参与建议 | AkShare |
 | **持仓监控** | 实时盈亏、加权涨幅、市值 | Sina + AkShare |
+| **宏观指标** | 上证/美元人民币/黄金/原油 实时芯片 | Sina |
+| **黑天鹅/灰犀牛** | 异常波动自动扫描 + 时段过滤 | 规则引擎 |
+| **八字/五运六气** | 今日四柱 + 岁运/六气/养生/行业提示 | 本地计算 |
 | **Watchdog** | 交通灯 🔴🟡🟢 + 情绪变化推送 | 规则引擎 |
 | **AI策略** | 偏多/偏空/震荡 + 关注/风险标的 | 规则引擎 |
+| **数据源管理** | 自动测速/手动切换数据源优先级 | Sina/AkShare/Yahoo |
 | **隐私模式** | 一键隐藏持仓金额 (****) | 前端 |
 
 ## 快速开始
@@ -36,14 +40,18 @@ python src/server.py
 src/
   config.py           集中配置（环境变量覆盖）
   server.py           Flask 后端 + API
-  providers.py        数据源（AkShare/Sina/Yahoo）
+  providers.py        数据源（Sina/AkShare/Yahoo）
   sentiment.py        情绪判断引擎
   analysis.py         主线/策略分析
   collect_stocks.py   每日 CSV 快照采集
   summary.py          终端快速查看
   time_utils.py       UTC+8 时间工具类
+  tools/
+    bazi_core.py      八字/五运六气计算库
 static/
   index.html          前端单页面（暗色主题）
+  css/style.css       样式表
+  js/app.js           前端逻辑（petite-vue + vanilla JS）
 data/
   YYYY-MM-DD.csv      每日快照（保留最近5天）
   sentiment_config.json     情绪阈值配置
@@ -53,8 +61,16 @@ docker/
   Dockerfile          容器构建
   docker-entrypoint.sh  启动脚本（cron + gunicorn）
 tests/
-  smoke_test.py       回归测试（7项）
-.env.example          环境变量说明文件
+  conftest.py         公共 path 设置
+  smoke_test.py       集成回归测试（7项）
+  test_analysis.py    分析引擎（21项）
+  test_config.py      配置模块（4项）
+  test_providers.py   数据源层（22项）
+  test_sentiment.py   情绪引擎（10项）
+  test_server_csv.py  CSV 持久化（11项）
+  test_server_trading.py  交易时段逻辑（16项）
+  test_time_utils.py  时间工具（5项）
+  test_watchlist.py   自选股 CRUD（13项）
 ```
 
 ## API 端点
@@ -62,27 +78,50 @@ tests/
 | 端点 | 方法 | 说明 | 缓存 |
 |------|------|------|------|
 | `/api/stocks` | GET | 持仓行情 | 10min |
+| `/api/stocks` | POST | 添加自选股 | — |
+| `/api/stocks/<ticker>` | DELETE | 删除自选股 | — |
 | `/api/refresh/<ticker>` | GET | 刷新单只 | — |
+| `/api/history/<ticker>` | GET | 历史K线 | — |
 | `/api/limit-stats` | GET | 涨跌停 + 昨涨停表现 | 5min |
 | `/api/market-sentiment-auto` | GET | 自动情绪判断 | — |
 | `/api/market-sentiment` | POST | 手动情绪判断 | — |
+| `/api/sentiment-history` | GET | 情绪历史记录 | — |
+| `/api/sentiment-config` | GET/POST | 情绪阈值配置 | — |
 | `/api/mainline-auto` | GET | 主线 + 龙头 | — |
 | `/api/ai-edge` | GET | AI 策略引擎 | 30min |
 | `/api/auto-brief` | GET | 智能简报 | 30min |
+| `/api/quickread` | POST | 新闻一键解读 | — |
+| `/api/macro-impact` | POST | 宏观事件影响分析 | — |
+| `/api/glossary` | GET | 金融术语解释 | — |
+| `/api/macro` | GET | 宏观指标（上证/汇率/黄金/原油） | 60s |
+| `/api/risk-events` | GET | 黑天鹅/灰犀牛扫描 (`?period=1h\|today\|3d\|7d\|30d`) | — |
+| `/api/bazi` | GET | 今日八字 + 五运六气 | — |
+| `/api/config/export` | GET | 导出配置 | — |
+| `/api/config/import` | POST | 导入配置 | — |
+| `/api/providers/test` | POST | 测试所有数据源速度 | — |
+| `/api/providers/order` | GET/POST | 获取/设置数据源优先级 | — |
+| `/api/providers/auto` | POST | 自动选择最快数据源 | — |
 
 ## 数据源优先级（A股）
 
-1. **AkShare** — 东方财富实时行情
-2. **Sina** — 新浪财经（AkShare 不可用时）
+1. **Sina** — 新浪财经实时行情（快速，逐只查询）
+2. **AkShare** — 东方财富（慢，全市场扫描，约3分钟）
 3. **Yahoo Finance** — 最终兜底
 
 52周高低价：Sina K线 API（260日线，12小时缓存）
 
+> 可通过 ⚡数据源 按钮或 `/api/providers/auto` 自动测速切换。
+
 ## 前端功能
 
 - **Stats Bar**: 14个指标芯片（持仓/涨跌/最强最弱/市值/盈亏/持仓涨幅/涨停/跌停/昨涨停胜率/情绪/建议）
+- **宏观指标芯片**: 上证指数/美元人民币/黄金/原油 实时价格 + 涨跌箭头
 - **交通灯 Watchdog**: 🟢无告警 / 🟡1-2条 / 🔴3+条；情绪变化自动推送
-- **6张 Insight 卡片**: Watchdog、涨跌停、主线、情绪、简报、AI策略
+- **10张 Insight 卡片**: Watchdog、涨跌停、主线、情绪、简报、AI策略、宏观、风险雷达、八字/五运六气、数据源管理
+- **黑天鹅/灰犀牛雷达**: 自动扫描异常波动，支持 1h/today/3d/7d/30d 时段切换
+- **八字/五运六气**: 今日四柱纳音 + 岁运/司天/在泉/主客气 + 养生/行业提示
+- **数据源面板**: ⚡ 一键测速、自动选择最快源、手动调整优先级
+- **刷新频率选择**: 10s/30s/1m/10m/30m 可选（默认30m）
 - **配色切换**: A股（红涨绿跌）/ 美股（绿涨红跌），badge背景跟随切换
 - **隐私模式**: 🔓/🔒 按钮一键遮蔽成本/股数/盈亏
 - **静默时段**: 15:30-08:30 (UTC+8) 自动暂停刷新
@@ -92,7 +131,8 @@ tests/
 
 | 数据 | 间隔 |
 |------|------|
-| 行情报价 | 1 分钟 |
+| 行情报价 | 可选 10s/30s/1m/10m/30m（默认30m） |
+| 宏观指标 | 5 分钟 |
 | 涨跌停统计 | 5 分钟 |
 | 情绪/主线/简报/AI | 30 分钟 |
 
@@ -106,14 +146,16 @@ python src/collect_stocks.py          # 手动
 ## 测试
 
 ```powershell
-python tests/smoke_test.py            # 7 项回归测试
+python -m pytest tests/                # 109 项全量测试
+python -m pytest tests/ -x --tb=short  # 遇错即停
+python -m pytest tests/smoke_test.py   # 仅集成烟测（7项）
 ```
 
 ## 技术栈
 
 - Python 3.14+ / Flask
-- AkShare + Sina + Yahoo Finance
-- 前端: 原生 JS + CSS（无框架）
+- Sina + AkShare + Yahoo Finance（动态优先级）
+- 前端: petite-vue 0.4.1 + vanilla JS + CSS（暗色主题）
 - 存储: localStorage（持仓/配置）+ CSV + JSON
 - 时区: UTC+8 全链路
 
@@ -140,7 +182,13 @@ FUN_SINA_KLINE_TIMEOUT=12
 Run a quick end-to-end smoke test (local API + key endpoint contracts):
 
 ```powershell
-python tests/smoke_test.py
+python -m pytest tests/smoke_test.py
+```
+
+Or run the full suite (109 tests):
+
+```powershell
+python -m pytest tests/ --tb=short
 ```
 
 What it checks:
@@ -165,7 +213,7 @@ Daily:
 
 Before release:
 - Run syntax check: `python -m py_compile src/server.py src/collect_stocks.py src/summary.py`
-- Run smoke test: `python tests/smoke_test.py`
+- Run full tests: `python -m pytest tests/ --tb=short`
 - Log changes in PATCH_HISTORY.md
 
 ## Troubleshooting

@@ -24,7 +24,9 @@ watchlist_cn copy.json
 # Personal generated market data
 data/*.csv
 data/sentiment_last_known.json
+data/sentiment_history.json
 
 # OS
 .DS_Store
 Thumbs.db
+win_tool/

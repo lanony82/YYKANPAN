@@ -475,3 +475,82 @@ Copy this template for each new patch:
 - Summary:
   - Added Docker support with Dockerfile, entrypoint script, and docker-compose.
   - Centralized all tunable parameters in `src/config.py` with `FUN_*` env var overrides.
+
+### 37. Macro indicator card (上证/汇率/黄金/原油)
+- File: src/server.py, static/index.html, static/js/app.js, static/css/style.css
+- Type: Improvement
+- Summary:
+  - New `/api/macro` endpoint fetching 4 indicators from Sina real-time API (`hq.sinajs.cn`).
+  - 60-second TTL cache. Returns name, price, change%, arrow direction.
+  - Frontend macro chips row with 5-minute auto-refresh.
+- Validation: API returns 4 indicators with live prices.
+
+### 38. Black Swan / Grey Rhino risk event radar
+- File: src/server.py, static/index.html, static/js/app.js, static/css/style.css
+- Type: Improvement
+- Summary:
+  - New `/api/risk-events` endpoint scanning macro + stock data for anomalies.
+  - Black Swan: single-stock crash ≥7%, macro index drop ≥3%, gold/oil spike ≥5%.
+  - Grey Rhino: multi-stock cluster drop, market breadth ≤20%, CNY weakness, sustained decline.
+  - In-memory `_RISK_EVENT_HISTORY` with hourly dedup.
+  - Period filter: `?period=1h|today|3d|7d|30d`.
+  - Frontend radar card with period select and manual refresh.
+- Validation: Simulated data correctly triggers both event types.
+
+### 39. Bazi (八字) + Wuyun Liuqi (五运六气) card
+- File: src/tools/bazi_core.py, src/server.py, static/index.html, static/js/app.js, static/css/style.css
+- Type: Improvement
+- Summary:
+  - New `calc_wuyun_liuqi(dt)` in bazi_core.py: computes 岁运, 司天, 在泉, 当前气期, 主气, 客气.
+  - Added health tips (`_HEALTH_TIPS`) and trading sector hints (`_TRADING_TIPS`) per element/period.
+  - New `/api/bazi` endpoint returns four pillars + wuyun liuqi data.
+  - Frontend bazi card with pillar display, wuyun chips, and tip sections.
+  - Styled with `.wuyun-section`, `.wuyun-chip`, `.wuyun-tip`, `.tip-health`, `.tip-trading`.
+- Validation: 2026 丙午年 → 水运太过, 少阴君火司天, 阳明燥金在泉.
+
+### 40. Data source management panel
+- File: src/server.py, static/index.html, static/js/app.js
+- Type: Improvement
+- Summary:
+  - New `/api/providers/test` (POST): tests all providers with timing.
+  - New `/api/providers/order` (GET/POST): get/set provider priority.
+  - New `/api/providers/auto` (POST): auto-select fastest provider.
+  - Dynamic `_preferred_provider_order` list, default Sina-first.
+  - Frontend ⚡ panel with test/auto buttons and draggable order.
+- Validation: Provider test returns response times; auto-select picks fastest.
+
+### 41. Configurable refresh interval selector
+- File: static/index.html, static/js/app.js
+- Type: Improvement
+- Summary:
+  - Added dropdown selector for stock quote refresh: 10s/30s/1m/10m/30m.
+  - Default changed from 1m to 30m to reduce API load.
+  - Selection persisted in localStorage.
+- Validation: Changing interval immediately adjusts timer.
+
+### 42. Provider order changed: Sina first
+- File: src/server.py, src/providers.py
+- Type: Change
+- Summary:
+  - Default A-share provider order changed from AkShare→Sina→Yahoo to Sina→AkShare→Yahoo.
+  - Sina is faster for individual stock queries; AkShare bulk scan ~3min is now fallback.
+- Validation: Single-stock fetch completes in <1s via Sina.
+
+### 43. Test suite expansion to 109 tests
+- File: tests/ (all test files)
+- Type: Improvement
+- Summary:
+  - Expanded from 7 smoke tests to 109 comprehensive tests across 8 files.
+  - P0 unit tests: sentiment (10), analysis (21), providers (22), time_utils (5), config (4).
+  - P1 integration: server_trading (16), server_csv (11), watchlist (13), smoke (7).
+  - Fixed test isolation: `_clean_config_import` fixture now saves/restores sys.modules.
+  - Fixed CSV test patching: patches `stock_app.cfg` directly instead of re-importing.
+- Validation: `python -m pytest tests/` → 109 passed.
+
+### 44. Cleaned up unused files
+- File: src/tools/8zi.py (deleted), src/tools/widget.py (deleted)
+- Type: Cleanup
+- Summary:
+  - Removed standalone `8zi.py` (superseded by bazi_core.py).
+  - Removed standalone `widget.py` (unused widget script).
+- Validation: No imports reference deleted files; all tests pass.

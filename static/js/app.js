@@ -803,6 +803,12 @@ function render() {
         <div class="sc-field priv"><span class="sc-label">浮盈亏%</span><span class="${pnlPct == null ? "flat" : cls(pnlPct)}">${privacyHidden ? MASK : (pnlPct == null ? "—" : `${pnlPct >= 0 ? "+" : ""}${fmtNum(pnlPct,2)}%`)}</span></div>
       </div>
       <div class="stock-card-actions">
+        ${s.suggest ? `<div class="stock-card-suggest">
+          <span class="suggest-action suggest-${s.suggest.action}">${s.suggest.action}</span>
+          <span class="suggest-tip">${s.suggest.tip}</span>
+          ${s.suggest.target ? `<span class="suggest-level">目标 ${fmtNum(s.suggest.target,2)}</span>` : ""}
+          ${s.suggest.stop ? `<span class="suggest-level">止损 ${fmtNum(s.suggest.stop,2)}</span>` : ""}
+        </div>` : ""}
         <button class="del-btn" onclick="editPosition('${s.ticker}')">${I.btn_position}</button>
         <button class="del-btn" onclick="removeStock('${s.ticker}')">${I.btn_delete}</button>
       </div>
@@ -1091,6 +1097,141 @@ showRandomTip();
     sync(true);
   }
 })();
+
+// ── Macro indicators (宏观风向标) ─────────────────────────────────────────────
+
+async function loadMacro() {
+  const bar = document.getElementById("macro-bar");
+  if (!bar) return;
+  try {
+    const res = await fetch("/api/macro");
+    const data = await res.json();
+    if (!data.length) { bar.innerHTML = '<span class="macro-loading">暂无数据</span>'; return; }
+    bar.innerHTML = data.map(d => {
+      const dir = d.change_pct > 0 ? "up" : d.change_pct < 0 ? "down" : "flat";
+      const arrow = d.change_pct > 0 ? "▲" : d.change_pct < 0 ? "▼" : "—";
+      const sign = d.change > 0 ? "+" : "";
+      return `<div class="macro-chip">
+        <span class="macro-name">${d.name}</span>
+        <span class="macro-price">${d.price}<span class="macro-unit">${d.unit || ""}</span></span>
+        <span class="macro-change ${dir}">${arrow} ${sign}${d.change} (${sign}${d.change_pct}%)</span>
+      </div>`;
+    }).join("");
+  } catch (_) {
+    bar.innerHTML = '<span class="macro-loading">获取失败</span>';
+  }
+}
+loadMacro();
+
+// ── Risk events (黑天鹅/灰犀牛) ───────────────────────────────────────────────
+
+async function loadRiskEvents() {
+  const list = document.getElementById("risk-events-list");
+  const countEl = document.getElementById("risk-count");
+  if (!list) return;
+  const period = document.getElementById("sel-risk-period")?.value || "today";
+  list.innerHTML = '<div class="risk-empty">扫描中…</div>';
+  try {
+    const res = await fetch(`/api/risk-events?period=${period}`);
+    const d = await res.json();
+    if (!d.ok) { list.innerHTML = '<div class="risk-empty">获取失败</div>'; return; }
+    if (countEl) countEl.textContent = `${d.count} 条`;
+    if (!d.events.length) {
+      list.innerHTML = '<div class="risk-safe">✅ 当前无异常事件，市场平稳</div>';
+      return;
+    }
+    list.innerHTML = d.events.map(e => `
+      <div class="risk-event severity-${e.severity}">
+        <span class="risk-badge type-${e.type}">${e.type}</span>
+        <div class="risk-body">
+          <div class="risk-title">${e.title}</div>
+          <div class="risk-detail">${e.detail}</div>
+        </div>
+        <span class="risk-time">${e.time}</span>
+      </div>
+    `).join("");
+  } catch (_) {
+    list.innerHTML = '<div class="risk-empty">获取失败</div>';
+  }
+}
+document.getElementById("btn-risk-refresh")?.addEventListener("click", loadRiskEvents);
+document.getElementById("sel-risk-period")?.addEventListener("change", loadRiskEvents);
+loadRiskEvents();
+
+// ── Provider test panel ───────────────────────────────────────────────────────
+
+document.getElementById("btn-test-provider")?.addEventListener("click", () => {
+  const panel = document.getElementById("provider-panel");
+  panel.style.display = panel.style.display === "none" ? "block" : "none";
+  // Load current order
+  fetch("/api/providers/order").then(r=>r.json()).then(d => {
+    const lbl = document.getElementById("provider-order-label");
+    if (lbl) lbl.textContent = "当前: " + (d.order||[]).join(" → ");
+  }).catch(()=>{});
+});
+document.getElementById("btn-close-provider")?.addEventListener("click", () => {
+  document.getElementById("provider-panel").style.display = "none";
+});
+document.getElementById("btn-auto-provider")?.addEventListener("click", async () => {
+  const box = document.getElementById("provider-results");
+  box.innerHTML = '<p class="provider-hint">测试中…请稍候</p>';
+  try {
+    const res = await fetch("/api/providers/auto", {method:"POST"});
+    const d = await res.json();
+    let html = '<table><tr><th>数据源</th><th>状态</th><th>耗时</th><th>价格</th></tr>';
+    (d.results||[]).forEach(r => {
+      const cls = r.ok ? "prov-ok" : "prov-fail";
+      const best = r.provider === d.order?.[0] ? " prov-best" : "";
+      html += `<tr class="${best}"><td>${r.provider}</td><td class="${cls}">${r.ok?"✓":"✗"}</td><td>${r.time_s}s</td><td>${r.price ?? "—"}</td></tr>`;
+    });
+    html += '</table>';
+    box.innerHTML = html;
+    const lbl = document.getElementById("provider-order-label");
+    if (lbl) lbl.textContent = "当前: " + (d.order||[]).join(" → ");
+  } catch (e) {
+    box.innerHTML = '<p class="provider-hint">测试失败</p>';
+  }
+});
+
+// ── Bazi card (八字) ──────────────────────────────────────────────────────────
+
+async function loadBazi() {
+  try {
+    const res = await fetch("/api/bazi");
+    const d = await res.json();
+    if (!d.ok) return;
+    const el = (id) => document.getElementById(id);
+    el("bazi-solar").textContent = `📅 ${d.solar}`;
+    el("bazi-lunar").textContent = `📖 ${d.lunar}`;
+    el("bazi-terms").textContent = d.terms ? `🌾 ${d.terms}` : "";
+    const wrap = el("bazi-pillars");
+    wrap.innerHTML = d.pillars.map(p =>
+      `<div class="bazi-pillar"><div class="pillar-label">${p.label}</div><div class="pillar-value">${p.value}</div></div>`
+    ).join("");
+    el("bazi-nayin").textContent = `纳音：${d.nayin}`;
+    // 五运六气 (Five Movements & Six Qi)
+    const w = d.wuyun;
+    if (w) {
+      el("bazi-wuyun").innerHTML = `
+        <div class="wuyun-title">☯ 五运六气</div>
+        <div class="wuyun-chips">
+          <span class="wuyun-chip">岁运 <b>${w.sui_yun}</b></span>
+          <span class="wuyun-chip">司天 <b>${w.sitian}</b></span>
+          <span class="wuyun-chip">在泉 <b>${w.zaiquan}</b></span>
+        </div>
+        <div class="wuyun-chips">
+          <span class="wuyun-chip active">${w.period_name}</span>
+          <span class="wuyun-chip">主气 <b>${w.host_qi}</b></span>
+          <span class="wuyun-chip">客气 <b>${w.guest_qi}</b></span>
+        </div>
+        <div class="wuyun-comment">${w.comment}</div>
+        ${w.health_tip ? `<div class="wuyun-tip tip-health">${w.health_tip}</div>` : ''}
+        ${w.trading_tip ? `<div class="wuyun-tip tip-trading">${w.trading_tip}</div>` : ''}
+      `;
+    }
+  } catch (_) {}
+}
+loadBazi();
 
 // ── Insight tools ─────────────────────────────────────────────────────────────
 
@@ -1524,7 +1665,27 @@ ${I.lbl_verdict}: ${perf.verdict}`;
 }
 
 // ── Auto-refresh (skip in Beijing quiet hours: 15:30-08:30) ────────────────
-setInterval(() => runAutoTask(loadStocks), 60_000);
+let _stockRefreshTimer = null;
+function _startStockRefresh() {
+  if (_stockRefreshTimer) clearInterval(_stockRefreshTimer);
+  const ms = parseInt(document.getElementById("sel-refresh-interval").value, 10) || 60000;
+  _stockRefreshTimer = setInterval(() => runAutoTask(loadStocks), ms);
+}
+_startStockRefresh();
+document.getElementById("sel-refresh-interval").addEventListener("change", () => {
+  _startStockRefresh();
+  localStorage.setItem("yykanpan-refresh-interval", document.getElementById("sel-refresh-interval").value);
+});
+// Restore saved preference
+(function() {
+  const saved = localStorage.getItem("yykanpan-refresh-interval");
+  if (saved) {
+    const sel = document.getElementById("sel-refresh-interval");
+    sel.value = saved;
+    _startStockRefresh();
+  }
+})();
+setInterval(() => runAutoTask(loadMacro), 300_000);  // every 5min
 setInterval(() => runAutoTask(() => generateAutoBrief(false)), 1_800_000);
 setInterval(() => runAutoTask(refreshMarketSentimentAuto), 1_800_000);
 setInterval(() => runAutoTask(refreshMainlineAuto), 1_800_000);

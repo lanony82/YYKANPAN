@@ -45,6 +45,15 @@ header {
 .brand small { font-size: .75rem; color: var(--muted); margin-left: 8px; font-weight: 400; }
 
 .header-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+#sel-refresh-interval {
+  font-size: .78rem;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--fg);
+  cursor: pointer;
+}
 #last-update  { font-size: .78rem; color: var(--muted); }
 #auto-status {
   font-size: .78rem;
@@ -374,6 +383,165 @@ header {
   text-align: right;
 }
 
+/* ── Macro indicators (宏观风向标) ── */
+.macro-bar {
+  display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px;
+}
+.macro-chip {
+  flex: 1 1 140px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.macro-chip .macro-name {
+  font-size: .78rem; color: var(--muted); font-weight: 500;
+}
+.macro-chip .macro-price {
+  font-size: 1.15rem; font-weight: 700; color: var(--fg);
+}
+.macro-chip .macro-change {
+  font-size: .82rem; font-weight: 600;
+}
+.macro-chip .macro-change.up   { color: var(--up); }
+.macro-chip .macro-change.down { color: var(--down); }
+.macro-chip .macro-change.flat { color: var(--muted); }
+.macro-chip .macro-unit {
+  font-size: .7rem; color: var(--muted); margin-left: 2px;
+}
+.macro-loading { color: var(--muted); font-size: .85rem; }
+
+/* ── Risk events (黑天鹅/灰犀牛) ── */
+.risk-controls {
+  display: flex; align-items: center; gap: 8px; margin: 6px 0 10px;
+}
+.risk-controls select {
+  font-size: .82rem; padding: 3px 6px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--surface); color: var(--fg); cursor: pointer;
+}
+.risk-controls button {
+  font-size: .82rem; padding: 4px 12px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--card-bg); color: var(--fg); cursor: pointer;
+}
+.risk-count {
+  font-size: .78rem; color: var(--muted); margin-left: auto;
+}
+.risk-events-list {
+  display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto;
+}
+.risk-event {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 8px 12px; border-radius: 8px;
+  border-left: 4px solid var(--border);
+  background: var(--surface);
+}
+.risk-event.severity-high { border-left-color: #f44336; background: rgba(244,67,54,.06); }
+.risk-event.severity-medium { border-left-color: #ff9800; background: rgba(255,152,0,.06); }
+.risk-event .risk-badge {
+  font-size: .72rem; font-weight: 700; padding: 2px 8px;
+  border-radius: 4px; white-space: nowrap; flex-shrink: 0;
+}
+.risk-badge.type-黑天鹅 { background: rgba(244,67,54,.18); color: #f44336; }
+.risk-badge.type-灰犀牛 { background: rgba(255,152,0,.18); color: #ff9800; }
+.risk-event .risk-body { flex: 1; min-width: 0; }
+.risk-event .risk-title { font-size: .88rem; font-weight: 600; color: var(--fg); }
+.risk-event .risk-detail { font-size: .78rem; color: var(--muted); margin-top: 2px; }
+.risk-event .risk-time { font-size: .7rem; color: var(--muted); white-space: nowrap; flex-shrink: 0; }
+.risk-empty { font-size: .85rem; color: var(--muted); padding: 12px 0; }
+.risk-safe { font-size: .92rem; color: #4caf50; padding: 12px 0; }
+
+/* ── Provider panel ── */
+.provider-panel {
+  position: fixed; top: 60px; right: 20px; z-index: 999;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 16px; min-width: 320px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.5);
+}
+.provider-panel-header {
+  display: flex; justify-content: space-between; align-items: center;
+  font-weight: 700; margin-bottom: 10px;
+}
+.provider-panel-header button {
+  background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.1rem;
+}
+.provider-results table {
+  width: 100%; border-collapse: collapse; font-size: .85rem; margin-bottom: 8px;
+}
+.provider-results th, .provider-results td {
+  padding: 5px 8px; text-align: left; border-bottom: 1px solid var(--border);
+}
+.provider-results .prov-ok   { color: #4caf50; }
+.provider-results .prov-fail { color: #f44336; }
+.provider-results .prov-best { background: rgba(76,175,80,.12); }
+.provider-actions {
+  display: flex; align-items: center; gap: 10px;
+}
+.provider-actions button {
+  padding: 5px 14px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--card-bg); color: var(--fg); cursor: pointer; font-size: .85rem;
+}
+.provider-order-label { font-size: .78rem; color: var(--muted); }
+.provider-hint { font-size: .82rem; color: var(--muted); margin: 0; }
+
+/* ── Bazi card (八字) ── */
+.bazi-card-body {
+  margin-top: 8px;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+}
+.bazi-row {
+  font-size: .92rem;
+  line-height: 1.6;
+  color: var(--fg);
+}
+.bazi-lunar { color: #f5c518; }
+.bazi-terms { color: #00d2ff; font-size: .82rem; }
+.bazi-nayin  { color: var(--muted); font-size: .82rem; margin-top: 6px; }
+.bazi-pillars {
+  display: flex;
+  gap: 12px;
+  margin: 10px 0 4px;
+}
+.bazi-pillar {
+  text-align: center;
+  min-width: 52px;
+}
+.bazi-pillar .pillar-label {
+  font-size: .72rem;
+  color: var(--muted);
+}
+.bazi-pillar .pillar-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #e94560;
+  letter-spacing: 2px;
+}
+
+/* 五运六气 section inside bazi card */
+.wuyun-section { margin-top: 10px; border-top: 1px solid rgba(255,255,255,.08); padding-top: 8px; }
+.wuyun-title { font-size: .82rem; color: #00d2ff; margin-bottom: 6px; }
+.wuyun-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 5px; }
+.wuyun-chip {
+  font-size: .78rem; padding: 2px 8px; border-radius: 10px;
+  background: rgba(255,255,255,.06); color: var(--muted);
+}
+.wuyun-chip b { color: var(--fg); }
+.wuyun-chip.active { background: rgba(233,69,96,.18); color: #e94560; font-weight: 600; }
+.wuyun-comment {
+  font-size: .78rem; color: var(--muted); line-height: 1.5;
+  margin-top: 4px; padding: 4px 6px;
+  background: rgba(255,255,255,.03); border-radius: 6px;
+}
+.wuyun-tip {
+  font-size: .78rem; line-height: 1.5; margin-top: 4px;
+  padding: 4px 8px; border-radius: 6px;
+}
+.tip-health { background: rgba(76,175,80,.08); color: #81c784; }
+.tip-trading { background: rgba(255,193,7,.08); color: #ffd54f; }
+
 .table-wrap {
   padding: 0 28px 40px;
   overflow-x: auto;
@@ -559,6 +727,39 @@ td:nth-child(2) { text-align: left; }
   display: flex;
   gap: 6px;
   justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+/* ── Per-stock suggestion ── */
+.stock-card-suggest {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: .82rem;
+  line-height: 1.4;
+}
+.suggest-action {
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: .8rem;
+}
+.suggest-买入  { background: var(--badge-up-bg);  color: var(--up); }
+.suggest-卖出  { background: var(--badge-down-bg); color: var(--down); }
+.suggest-持有  { background: rgba(150,150,150,.15); color: var(--muted); }
+.suggest-观望  { background: rgba(255,200,50,.12); color: #c9a800; }
+.suggest-tip   { color: var(--fg); flex: 1; min-width: 100px; }
+.suggest-level {
+  color: var(--muted);
+  font-size: .78rem;
+  white-space: nowrap;
 }
 .stock-card.error-card {
   opacity: .7;

@@ -117,12 +117,14 @@ class TestGetStocksSnapshot:
     @patch.object(stock_app, "load_watchlist", return_value=[
         {"ticker": "600519.SS", "name": "贵州茅台"},
     ])
-    def test_off_hours_no_csv_returns_placeholders(self, mock_wl, mock_csv, mock_session):
-        """Outside trading + no CSV → offline placeholders."""
+    @patch.object(stock_app, "fetch_stock", return_value=SAMPLE_STOCK)
+    @patch.object(stock_app, "_save_stocks_csv")
+    def test_off_hours_no_csv_falls_through_to_live(self, mock_save, mock_fetch, mock_wl, mock_csv, mock_session):
+        """Outside trading + no CSV → falls through to live fetch."""
         result = stock_app._get_stocks_snapshot()
         assert len(result) == 1
-        assert result[0]["source"] == "offline"
-        assert result[0]["price"] is None
+        assert result[0]["price"] == SAMPLE_STOCK["price"]
+        mock_fetch.assert_called_once()
 
     @patch.object(stock_app, "_is_cn_trading_session", return_value=True)
     @patch.object(stock_app, "load_watchlist", return_value=[

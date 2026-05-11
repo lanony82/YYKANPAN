@@ -47,7 +47,7 @@ class _Config:
     # ── Retry ─────────────────────────────────────────────────────────────────
     MAX_FETCH_RETRIES: int = _env("FUN_MAX_RETRIES", 2, int)
     RETRY_BACKOFF_SECONDS: float = _env("FUN_RETRY_BACKOFF", 0.8, float)
-    LIVE_FETCH_TIMEOUT_SECONDS: int = _env("FUN_LIVE_FETCH_TIMEOUT", 30, int)
+    LIVE_FETCH_TIMEOUT_SECONDS: int = _env("FUN_LIVE_FETCH_TIMEOUT", 180, int)
 
     # ── Timeouts (seconds) ────────────────────────────────────────────────────
     SINA_KLINE_TIMEOUT: int = _env("FUN_SINA_KLINE_TIMEOUT", 8, int)

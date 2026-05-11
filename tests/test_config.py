@@ -13,12 +13,15 @@ sys.path.insert(0, str(SRC_DIR))
 @pytest.fixture(autouse=True)
 def _clean_config_import():
     """Ensure fresh config import for each test (env var isolation)."""
-    mods_to_remove = [k for k in sys.modules if k.startswith("config")]
-    for m in mods_to_remove:
+    saved = {k: sys.modules[k] for k in list(sys.modules) if k.startswith("config")}
+    for m in saved:
         del sys.modules[m]
     yield
+    # Remove any config modules created during the test
     for m in [k for k in sys.modules if k.startswith("config")]:
         del sys.modules[m]
+    # Restore the original modules so other test files aren't affected
+    sys.modules.update(saved)
 
 
 def test_defaults_without_env():

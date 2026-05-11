@@ -13,7 +13,7 @@
 <header>
   <div class="brand">
     <span>A股</span>行情看板
-    <small>数据来源 AkShare 优先 · 仅供参考</small>
+    <small>数据来源 Sina 优先 · 仅供参考</small>
   </div>
   <div class="header-right">
     <span id="last-update">—</span>
@@ -21,9 +21,32 @@
     <button id="btn-color-mode">A股配色</button>
     <button id="btn-notif" title="全局通知开关">🔔</button>
     <button id="btn-privacy" title="隐藏/显示个人持仓数据">🔓 显示</button>
+    <select id="sel-refresh-interval" title="自动刷新间隔">
+      <option value="10000">10秒</option>
+      <option value="30000">30秒</option>
+      <option value="60000">1分钟</option>
+      <option value="600000">10分钟</option>
+      <option value="1800000" selected>30分钟</option>
+    </select>
+    <button id="btn-test-provider" title="测试数据源速度">⚡ 数据源</button>
     <button id="btn-refresh">⟳ 刷新</button>
   </div>
 </header>
+
+<!-- Provider test panel -->
+<div id="provider-panel" class="provider-panel" style="display:none;">
+  <div class="provider-panel-header">
+    <span>数据源测试</span>
+    <button id="btn-close-provider" title="关闭">✕</button>
+  </div>
+  <div id="provider-results" class="provider-results">
+    <p class="provider-hint">点击「自动测试」测速并自动选择最优数据源</p>
+  </div>
+  <div class="provider-actions">
+    <button id="btn-auto-provider">🔍 自动测试</button>
+    <span id="provider-order-label" class="provider-order-label"></span>
+  </div>
+</div>
 
 <!-- Add stock bar -->
 <div class="add-bar">
@@ -74,6 +97,13 @@
       <div class="stat-chip"><span class="label">昨涨停胜率</span><span class="val" id="st-zt-profit">—</span></div>
       <div class="stat-chip"><span class="label">情绪阶段</span><span class="val" id="st-sentiment-stage">—</span></div>
       <div class="stat-chip"><span class="label">交易建议</span><span class="val" id="st-sentiment-tradable">—</span></div>
+    </div>
+  </div>
+
+  <div class="insight-card" data-card-id="macro" draggable="true">
+    <h3><span class="drag-handle">⠿</span> 宏观风向标<button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
+    <div class="macro-bar" id="macro-bar">
+      <span class="macro-loading">加载中…</span>
     </div>
   </div>
 
@@ -176,6 +206,36 @@
     <div class="invest-tip-body" id="out-invest-tip">
       <div class="tip-text" id="tip-text">加载中…</div>
       <div class="tip-source" id="tip-source"></div>
+    </div>
+  </div>
+
+  <div class="insight-card" data-card-id="bazi" draggable="true">
+    <h3><span class="drag-handle">⠇</span> 今日八字 <span class="ai-badge" style="background:rgba(233,69,96,.15);color:#e94560">四柱</span><button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
+    <div id="bazi-card-body" class="bazi-card-body">
+      <div class="bazi-row" id="bazi-solar"></div>
+      <div class="bazi-row bazi-lunar" id="bazi-lunar"></div>
+      <div class="bazi-row bazi-terms" id="bazi-terms"></div>
+      <div class="bazi-pillars" id="bazi-pillars"></div>
+      <div class="bazi-row bazi-nayin" id="bazi-nayin"></div>
+      <div class="wuyun-section" id="bazi-wuyun"></div>
+    </div>
+  </div>
+
+  <div class="insight-card" data-card-id="risk-events" draggable="true">
+    <h3><span class="drag-handle">⠇</span> 黑天鹅 / 灰犀牛 <span class="ai-badge" style="background:rgba(244,67,54,.15);color:#f44336">风险雷达</span><button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
+    <div class="risk-controls">
+      <select id="sel-risk-period" title="时间范围">
+        <option value="1h">最近1小时</option>
+        <option value="today" selected>今日</option>
+        <option value="3d">近3天</option>
+        <option value="7d">近7天</option>
+        <option value="30d">近30天</option>
+      </select>
+      <button id="btn-risk-refresh">🔍 扫描</button>
+      <span id="risk-count" class="risk-count"></span>
+    </div>
+    <div id="risk-events-list" class="risk-events-list">
+      <div class="risk-empty">点击「扫描」检测异动事件</div>
     </div>
   </div>
 

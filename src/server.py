@@ -17,11 +17,21 @@ import re
 import os
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib import request as urlrequest
 from urllib import parse as urlparse
 from config import cfg
 from time_utils import BeijingTime
+
+# Bazi engine (八字)
+import sys as _sys
+_TOOLS_DIR = str(pathlib.Path(__file__).resolve().parent / "tools")
+if _TOOLS_DIR not in _sys.path:
+    _sys.path.insert(0, _TOOLS_DIR)
+from bazi_core import (
+    BaziCalculator, get_bazi_data, get_lunar_date_string, get_solar_term_info,
+    calc_wuyun_liuqi,
+)
 
 try:
     # AkShare is used as a fallback for Chinese A-shares when Yahoo is blocked.
@@ -359,7 +369,7 @@ def _save_stocks_csv(data: list[dict]) -> None:
         with open(out_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=_CSV_FIELDS, extrasaction="ignore")
             writer.writeheader()
-            writer.writerows(data)
+            writer.writerows(valid)
         # Cleanup old files
         csv_files = sorted(
             [p for p in data_dir.glob("*.csv") if len(p.stem) == 10],
@@ -419,6 +429,15 @@ def _invalidate_stocks_cache() -> None:
     STOCKS_CACHE_TS = 0.0
 
 
+def _backfill_52w(rows: list[dict]) -> None:
+    """Fill in missing 52-week high/low via Sina K-line for CSV-loaded rows."""
+    for row in rows:
+        if row.get("high52") is None and _is_a_share_ticker(row.get("ticker", "")):
+            h, l = _fetch_52w(row["ticker"])
+            row["high52"] = h
+            row["low52"] = l
+
+
 _stocks_lock = threading.Lock()
 
 def _get_stocks_snapshot(force_refresh: bool = False) -> list[dict]:
@@ -444,24 +463,14 @@ def _get_stocks_snapshot(force_refresh: bool = False) -> list[dict]:
             return STOCKS_CACHE_DATA
 
         # Outside trading hours → serve last saved CSV (avoids slow/empty fetches)
+        # If no CSV exists, fall through to live fetch so we get real data.
         if not _is_cn_trading_session():
             cached_csv = _load_latest_csv()
             if cached_csv:
+                _backfill_52w(cached_csv)
                 STOCKS_CACHE_DATA = cached_csv
                 STOCKS_CACHE_TS = now
                 return STOCKS_CACHE_DATA
-            # No CSV available — return watchlist placeholders instead of blocking
-            wl = load_watchlist()
-            STOCKS_CACHE_DATA = [
-                {"ticker": s["ticker"], "name": s.get("name", s["ticker"]),
-                 "price": None, "prev_close": None, "change": None,
-                 "change_pct": None, "volume": None, "high52": None,
-                 "low52": None, "market_cap": None, "date": None,
-                 "source": "offline", "error": "休市中，暂无历史数据"}
-                for s in wl
-            ]
-            STOCKS_CACHE_TS = now
-            return STOCKS_CACHE_DATA
 
         wl = load_watchlist()
 
@@ -486,6 +495,7 @@ def _get_stocks_snapshot(force_refresh: bool = False) -> list[dict]:
         # Live fetch timed out — fall back to CSV
         cached_csv = _load_latest_csv()
         if cached_csv:
+            _backfill_52w(cached_csv)
             STOCKS_CACHE_DATA = cached_csv
             STOCKS_CACHE_TS = now
             return STOCKS_CACHE_DATA
@@ -587,18 +597,6 @@ def _fetch_stock_akshare(ticker: str, name: str = "") -> dict:
         # Reconstruct previous close from price and absolute change.
         prev_close = round(price - change, 2)
 
-        # 52-week high/low from spot table (东方财富 columns)
-        high52 = row.get("52周最高") or row.get("year_high") or None
-        low52 = row.get("52周最低") or row.get("year_low") or None
-        try:
-            high52 = round(float(high52), 2) if high52 else None
-        except (ValueError, TypeError):
-            high52 = None
-        try:
-            low52 = round(float(low52), 2) if low52 else None
-        except (ValueError, TypeError):
-            low52 = None
-
         display_name = name or str(row.get("名称", "")).strip() or ticker
 
         return {
@@ -609,8 +607,8 @@ def _fetch_stock_akshare(ticker: str, name: str = "") -> dict:
             "change": round(change, 2),
             "change_pct": round(change_pct, 2),
             "volume": volume,
-            "high52": high52,
-            "low52": low52,
+            "high52": None,
+            "low52": None,
             "market_cap": market_cap,
             "date": _bj_date_str(),
             "source": "akshare",
@@ -664,9 +662,6 @@ def _fetch_stock_sina(ticker: str, name: str = "") -> dict:
         volume = int(float(parts[8] or 0))
         trade_date = parts[30].strip() if len(parts) > 30 else _bj_date_str()
 
-        # 52-week high/low via Sina K-line (cached 12h)
-        high52, low52 = _fetch_52w(ticker)
-
         return {
             "ticker": ticker,
             "name": display_name,
@@ -675,8 +670,8 @@ def _fetch_stock_sina(ticker: str, name: str = "") -> dict:
             "change": change,
             "change_pct": change_pct,
             "volume": volume,
-            "high52": high52,
-            "low52": low52,
+            "high52": None,
+            "low52": None,
             "market_cap": None,
             "date": trade_date,
             "source": "sina",
@@ -686,32 +681,150 @@ def _fetch_stock_sina(ticker: str, name: str = "") -> dict:
         return {"ticker": ticker, "name": name, "error": str(e)}
 
 
+def _generate_stock_suggestion(s: dict) -> dict | None:
+    """Rule-based suggestion for a single stock row.
+
+    Returns {"action": "买入"/"卖出"/"持有"/"观望",
+             "tip": str, "target": float|None, "stop": float|None}
+    or None if data is insufficient.
+    """
+    price = s.get("price")
+    if not price or s.get("error"):
+        return None
+
+    change_pct = s.get("change_pct") or 0
+    high52 = s.get("high52")
+    low52 = s.get("low52")
+    prev_close = s.get("prev_close") or price
+
+    tips = []
+    score = 0  # positive = bullish, negative = bearish
+
+    # ── 52-week position ──────────────────────────────────────────────────
+    if high52 and low52 and high52 > low52:
+        range52 = high52 - low52
+        pos52 = (price - low52) / range52  # 0 = at low, 1 = at high
+
+        if pos52 >= 0.95:
+            tips.append("接近52周新高，注意追高风险")
+            score -= 1
+        elif pos52 >= 0.80:
+            tips.append("处于52周高位区间")
+        elif pos52 <= 0.10:
+            tips.append("接近52周新低，可能超卖")
+            score += 1
+        elif pos52 <= 0.25:
+            tips.append("处于52周低位区间")
+            score += 0.5
+
+        # Target / stop based on 52-week range
+        target = round(price + range52 * 0.15, 2) if pos52 < 0.85 else None
+        stop = round(price - range52 * 0.10, 2) if pos52 > 0.15 else None
+    else:
+        target = None
+        stop = None
+
+    # ── Intraday momentum ─────────────────────────────────────────────────
+    if change_pct >= 5:
+        tips.append("放量大涨，关注是否突破")
+        score += 1
+    elif change_pct >= 2:
+        tips.append("涨势良好")
+        score += 0.5
+    elif change_pct <= -5:
+        tips.append("大幅下跌，谨慎操作")
+        score -= 1
+    elif change_pct <= -2:
+        tips.append("弱势回调")
+        score -= 0.5
+
+    # ── Support / resistance proximity ────────────────────────────────────
+    if prev_close and price:
+        gap_pct = abs(price - prev_close) / prev_close * 100
+        if gap_pct < 0.3:
+            tips.append("窄幅震荡，等待方向")
+
+    # ── Action recommendation ─────────────────────────────────────────────
+    if score >= 1.5:
+        action = "买入"
+    elif score >= 0.5:
+        action = "持有"
+    elif score <= -1.5:
+        action = "卖出"
+    elif score <= -0.5:
+        action = "观望"
+    else:
+        action = "持有"
+
+    if not tips:
+        tips.append("暂无明显信号")
+
+    return {
+        "action": action,
+        "tip": "；".join(tips),
+        "target": target,
+        "stop": stop,
+    }
+
+
+# ── Provider preference ──────────────────────────────────────────────────────
+_PROVIDER_FUNCS = {
+    "sina": _fetch_stock_sina,
+    "akshare": _fetch_stock_akshare,
+    "yahoo": _fetch_stock_yahoo,
+}
+_A_SHARE_DEFAULT_ORDER = ["sina", "akshare", "yahoo"]
+_preferred_provider_order: list[str] = list(_A_SHARE_DEFAULT_ORDER)
+
+
+def _test_providers(ticker: str = "600519.SS", name: str = "贵州茅台") -> list[dict]:
+    """Test all providers with a sample ticker, return timing and status."""
+    results = []
+    for pname in ["sina", "akshare", "yahoo"]:
+        fn = _PROVIDER_FUNCS[pname]
+        t0 = time.time()
+        try:
+            r = fn(ticker, name)
+            elapsed = round(time.time() - t0, 2)
+            ok = r.get("price") is not None and not r.get("error")
+            results.append({
+                "provider": pname,
+                "ok": ok,
+                "time_s": elapsed,
+                "price": r.get("price"),
+                "error": r.get("error"),
+            })
+        except Exception as e:
+            elapsed = round(time.time() - t0, 2)
+            results.append({
+                "provider": pname,
+                "ok": False,
+                "time_s": elapsed,
+                "price": None,
+                "error": str(e),
+            })
+    return results
+
+
 def fetch_stock(ticker: str, name: str = "") -> dict:
     """
     Fetch a stock snapshot.
     Strategy:
-    1) For A-shares: AkShare -> Sina -> Yahoo.
+    1) For A-shares: try providers in _preferred_provider_order.
     2) For non A-shares: Yahoo only.
     """
     if _is_a_share_ticker(ticker):
-        primary = _fetch_stock_akshare(ticker, name)
-        if not primary.get("error"):
-            return primary
+        errors = {}
+        for pname in _preferred_provider_order:
+            fn = _PROVIDER_FUNCS[pname]
+            result = fn(ticker, name)
+            if not result.get("error"):
+                return result
+            errors[pname] = result.get("error")
 
-        fallback = _fetch_stock_sina(ticker, name)
-        if not fallback.get("error"):
-            return fallback
-
-        fallback2 = _fetch_stock_yahoo(ticker, name)
-        if not fallback2.get("error"):
-            return fallback2
-
-        fallback2["error"] = (
-            f"AkShare失败: {primary.get('error')} | "
-            f"Sina失败: {fallback.get('error')} | "
-            f"Yahoo失败: {fallback2.get('error')}"
-        )
-        return fallback2
+        # All failed — return last result with combined error
+        result["error"] = " | ".join(f"{k}失败: {v}" for k, v in errors.items())
+        return result
 
     return _fetch_stock_yahoo(ticker, name)
 
@@ -1317,7 +1430,11 @@ def _analyze_mainline_auto() -> dict:
 
 @app.route("/api/stocks", methods=["GET"])
 def get_stocks():
-    return jsonify(_get_stocks_snapshot())
+    rows = _get_stocks_snapshot()
+    _backfill_52w(rows)
+    for row in rows:
+        row["suggest"] = _generate_stock_suggestion(row)
+    return jsonify(rows)
 
 @app.route("/api/stocks", methods=["POST"])
 def add_stock():
@@ -1670,7 +1787,7 @@ def config_export():
         watchlist = json.loads(WATCHLIST.read_text(encoding="utf-8")) if WATCHLIST.exists() else []
     except Exception:
         watchlist = []
-    payload = {"watchlist": watchlist, "exported_at": BeijingTime.now_str()}
+    payload = {"watchlist": watchlist, "exported_at": BeijingTime.datetime_str()}
     return app.response_class(
         json.dumps(payload, ensure_ascii=False, indent=2),
         mimetype="application/json",
@@ -1696,6 +1813,317 @@ def config_import():
     except Exception as e:
         return jsonify({"ok": False, "msg": f"保存失败: {e}"})
     return jsonify({"ok": True, "count": len(watchlist)})
+
+
+# ── Macro indicators (宏观指标) ───────────────────────────────────────────────
+
+_MACRO_SYMBOLS = "sh000001,fx_susdcny,hf_GC,hf_CL"
+_MACRO_CACHE: dict | None = None
+_MACRO_CACHE_TS: float = 0
+_MACRO_CACHE_TTL = 60  # seconds
+
+
+def _fetch_macro_indicators() -> list[dict]:
+    """Fetch key macro indicators from Sina in one HTTP call."""
+    global _MACRO_CACHE, _MACRO_CACHE_TS
+    now = time.time()
+    if _MACRO_CACHE is not None and (now - _MACRO_CACHE_TS) <= _MACRO_CACHE_TTL:
+        return _MACRO_CACHE
+
+    url = f"{cfg.SINA_QUOTE_API_URL}{_MACRO_SYMBOLS}"
+    req = urlrequest.Request(url, headers={
+        "Referer": "https://finance.sina.com.cn",
+        "User-Agent": "Mozilla/5.0",
+    })
+    try:
+        with urlrequest.urlopen(req, timeout=cfg.SINA_QUOTE_TIMEOUT) as resp:
+            raw = resp.read().decode("gbk", errors="replace")
+    except Exception as e:
+        return [{"name": "Error", "error": str(e)}]
+
+    results = []
+    for line in raw.strip().split("\n"):
+        line = line.strip()
+        if not line or '="' not in line:
+            continue
+        key_part = line.split("=")[0]  # var hq_str_XXXX
+        symbol = key_part.rsplit("_", 1)[-1] if "_" in key_part else key_part
+        fields = line.split('"')[1].split(",") if '"' in line else []
+        if not fields:
+            continue
+
+        try:
+            if symbol == "sh000001":
+                # Shanghai index: [0]=name [1]=open [2]=prev_close [3]=price
+                # [4]=high [5]=low ... [8]=volume [9]=turnover
+                name = fields[0] or "上证指数"
+                price = float(fields[3])
+                prev = float(fields[2])
+                change = round(price - prev, 2)
+                pct = round(change / prev * 100, 2) if prev else 0
+                results.append({"symbol": "sh000001", "name": name,
+                                "price": price, "prev": prev,
+                                "change": change, "change_pct": pct, "unit": ""})
+
+            elif "susdcny" in symbol:
+                # Forex: [0]=time [1]=prev_close ... [5]=price (buy)
+                price = float(fields[5])
+                prev = float(fields[1])
+                change = round(price - prev, 4)
+                pct = round(change / prev * 100, 2) if prev else 0
+                results.append({"symbol": "fx_susdcny", "name": "美元/人民币",
+                                "price": round(price, 4), "prev": round(prev, 4),
+                                "change": change, "change_pct": pct, "unit": ""})
+
+            elif symbol == "GC":
+                # Gold COMEX: [0]=price ... [7]=prev_settlement
+                price = float(fields[0])
+                prev = float(fields[7])
+                change = round(price - prev, 2)
+                pct = round(change / prev * 100, 2) if prev else 0
+                results.append({"symbol": "hf_GC", "name": "黄金(COMEX)",
+                                "price": price, "prev": prev,
+                                "change": change, "change_pct": pct, "unit": "$/oz"})
+
+            elif symbol == "CL":
+                # Oil WTI: [0]=price ... [7]=prev_settlement
+                price = float(fields[0])
+                prev = float(fields[7])
+                change = round(price - prev, 2)
+                pct = round(change / prev * 100, 2) if prev else 0
+                results.append({"symbol": "hf_CL", "name": "原油(WTI)",
+                                "price": price, "prev": prev,
+                                "change": change, "change_pct": pct, "unit": "$/bbl"})
+        except (IndexError, ValueError):
+            continue
+
+    _MACRO_CACHE = results
+    _MACRO_CACHE_TS = time.time()
+    return results
+
+
+@app.route("/api/macro", methods=["GET"])
+def macro():
+    data = _fetch_macro_indicators()
+    return jsonify(data)
+
+
+# ── Risk events (黑天鹅 / 灰犀牛) ────────────────────────────────────────────
+
+_RISK_EVENT_HISTORY: list[dict] = []  # in-memory event log
+
+
+def _scan_risk_events() -> list[dict]:
+    """Scan macro + stock data for Black Swan / Grey Rhino signals."""
+    events: list[dict] = []
+    now_str = _bj_now().strftime("%Y-%m-%d %H:%M")
+
+    # 1) Macro indicator shocks
+    macro = _fetch_macro_indicators()
+    for m in macro:
+        pct = abs(m.get("change_pct", 0))
+        name = m.get("name", "")
+        direction = "暴涨" if m.get("change_pct", 0) > 0 else "暴跌"
+
+        if "上证" in name and pct >= 3:
+            level = "黑天鹅" if pct >= 5 else "灰犀牛"
+            events.append({
+                "type": level, "time": now_str,
+                "title": f"上证指数{direction} {m.get('change_pct')}%",
+                "detail": f"当前 {m.get('price')}，前收 {m.get('prev')}",
+                "severity": "high" if pct >= 5 else "medium",
+            })
+        elif "美元" in name and pct >= 0.5:
+            level = "黑天鹅" if pct >= 1.5 else "灰犀牛"
+            events.append({
+                "type": level, "time": now_str,
+                "title": f"美元/人民币{direction} {m.get('change_pct')}%",
+                "detail": f"当前 {m.get('price')}，前收 {m.get('prev')}",
+                "severity": "high" if pct >= 1.5 else "medium",
+            })
+        elif "黄金" in name and pct >= 2:
+            level = "黑天鹅" if pct >= 4 else "灰犀牛"
+            events.append({
+                "type": level, "time": now_str,
+                "title": f"黄金{direction} {m.get('change_pct')}%",
+                "detail": f"当前 ${m.get('price')}/oz",
+                "severity": "high" if pct >= 4 else "medium",
+            })
+        elif "原油" in name and pct >= 3:
+            level = "黑天鹅" if pct >= 6 else "灰犀牛"
+            events.append({
+                "type": level, "time": now_str,
+                "title": f"原油{direction} {m.get('change_pct')}%",
+                "detail": f"当前 ${m.get('price')}/bbl",
+                "severity": "high" if pct >= 6 else "medium",
+            })
+
+    # 2) Individual stock extremes from watchlist
+    try:
+        rows = STOCKS_CACHE_DATA or []
+        for s in rows:
+            pct = abs(s.get("change_pct") or 0)
+            name = s.get("name", s.get("ticker", ""))
+            if pct >= 9.8:
+                tag = "涨停" if (s.get("change_pct") or 0) > 0 else "跌停"
+                events.append({
+                    "type": "灰犀牛" if tag == "涨停" else "黑天鹅",
+                    "time": now_str,
+                    "title": f"{name} {tag} {s.get('change_pct')}%",
+                    "detail": f"价格 {s.get('price')}",
+                    "severity": "high" if tag == "跌停" else "medium",
+                })
+            elif pct >= 5:
+                direction = "大涨" if (s.get("change_pct") or 0) > 0 else "大跌"
+                events.append({
+                    "type": "灰犀牛", "time": now_str,
+                    "title": f"{name} {direction} {s.get('change_pct')}%",
+                    "detail": f"价格 {s.get('price')}",
+                    "severity": "medium",
+                })
+    except Exception:
+        pass
+
+    # 3) Persist new events (deduplicate by title within same hour)
+    existing_keys = {(e["title"], e["time"][:13]) for e in _RISK_EVENT_HISTORY}
+    for e in events:
+        key = (e["title"], e["time"][:13])
+        if key not in existing_keys:
+            _RISK_EVENT_HISTORY.append(e)
+            existing_keys.add(key)
+
+    return events
+
+
+@app.route("/api/risk-events", methods=["GET"])
+def risk_events():
+    """Return risk events. ?period=1h|today|3d|7d|30d"""
+    # Scan for new events
+    _scan_risk_events()
+
+    period = request.args.get("period", "today")
+    now = _bj_now()
+
+    if period == "1h":
+        cutoff = now - timedelta(hours=1)
+    elif period == "3d":
+        cutoff = now - timedelta(days=3)
+    elif period == "7d":
+        cutoff = now - timedelta(days=7)
+    elif period == "30d":
+        cutoff = now - timedelta(days=30)
+    else:  # today
+        cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M")
+    filtered = [e for e in _RISK_EVENT_HISTORY if e["time"] >= cutoff_str]
+    # Sort newest first
+    filtered.sort(key=lambda e: e["time"], reverse=True)
+
+    return jsonify({
+        "ok": True,
+        "period": period,
+        "events": filtered,
+        "count": len(filtered),
+    })
+
+
+# ── Bazi (八字) endpoint ──────────────────────────────────────────────────────
+
+@app.route("/api/bazi", methods=["GET"])
+def bazi():
+    now = datetime.now()
+    weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+    # Lunar
+    lunar_str = get_lunar_date_string(now)
+
+    # Solar terms
+    info = get_solar_term_info(now)
+    term_parts = []
+    if info["prev"]:
+        name, _season, days_ago = info["prev"]
+        term_parts.append(f"{name} {days_ago}天前")
+    if info["today"]:
+        name, _season = info["today"]
+        term_parts.append(f"★ 今日{name}")
+    if info["next"]:
+        name, _season, days_left = info["next"]
+        term_parts.append(f"{days_left}天后 {name}")
+
+    # Bazi pillars
+    year_str, month_str, day_str, hours = get_bazi_data(now)
+    calc = BaziCalculator(now)
+    hour_zhi = calc.get_hour_zhi()
+    day_gan = calc.calc_day_gan_zhi()[0]
+    hour_gan = calc.calc_hour_gan(day_gan, hour_zhi)
+    hour_str = f"{hour_gan}{hour_zhi}"
+    nayin = calc.get_nayin(hour_gan, hour_zhi)
+
+    # 五运六气
+    wuyun = calc_wuyun_liuqi(now)
+
+    return jsonify({
+        "ok": True,
+        "solar": f"{now.year}年{now.month}月{now.day}日 {weekdays[now.weekday()]}",
+        "lunar": lunar_str,
+        "terms": " │ ".join(term_parts) if term_parts else "",
+        "pillars": [
+            {"label": "年柱", "value": year_str},
+            {"label": "月柱", "value": month_str},
+            {"label": "日柱", "value": day_str},
+            {"label": "时柱", "value": hour_str},
+        ],
+        "nayin": nayin,
+        "wuyun": wuyun,
+    })
+
+
+# ── Provider test & select ────────────────────────────────────────────────────
+
+@app.route("/api/providers/test", methods=["POST"])
+def test_providers():
+    """Test all data providers and return timing results."""
+    results = _test_providers()
+    # Auto-select: sort by ok (True first) then by speed
+    ranked = sorted(results, key=lambda r: (not r["ok"], r["time_s"]))
+    best = ranked[0]["provider"] if ranked and ranked[0]["ok"] else None
+    return jsonify({"results": results, "best": best, "current": list(_preferred_provider_order)})
+
+
+@app.route("/api/providers/order", methods=["GET"])
+def get_provider_order():
+    return jsonify({"order": list(_preferred_provider_order)})
+
+
+@app.route("/api/providers/order", methods=["POST"])
+def set_provider_order():
+    """Set provider priority order. Body: {"order": ["sina","akshare","yahoo"]}"""
+    global _preferred_provider_order
+    data = request.get_json(silent=True) or {}
+    order = data.get("order", [])
+    valid = [p for p in order if p in _PROVIDER_FUNCS]
+    # Append any missing providers at the end
+    for p in _A_SHARE_DEFAULT_ORDER:
+        if p not in valid:
+            valid.append(p)
+    _preferred_provider_order = valid
+    return jsonify({"ok": True, "order": _preferred_provider_order})
+
+
+@app.route("/api/providers/auto", methods=["POST"])
+def auto_select_provider():
+    """Test all providers and auto-set the fastest working one as primary."""
+    global _preferred_provider_order
+    results = _test_providers()
+    ranked = sorted(results, key=lambda r: (not r["ok"], r["time_s"]))
+    new_order = [r["provider"] for r in ranked if r["ok"]]
+    # Append failed providers at end as fallbacks
+    for r in ranked:
+        if r["provider"] not in new_order:
+            new_order.append(r["provider"])
+    _preferred_provider_order = new_order
+    return jsonify({"ok": True, "order": _preferred_provider_order, "results": results})
 
 
 # ── Serve frontend ────────────────────────────────────────────────────────────
