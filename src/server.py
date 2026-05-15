@@ -8,7 +8,6 @@ Then open http://localhost:5000
 """
 
 from flask import Flask, jsonify, request, send_from_directory, abort
-import yfinance as yf
 import pathlib
 import json
 import csv
@@ -20,15 +19,23 @@ import threading
 from datetime import datetime, timedelta
 from urllib import request as urlrequest
 from urllib import parse as urlparse
-from config import cfg
+from config import cfg, load_watchlist, save_watchlist, DEFAULT_STOCKS
 from time_utils import BeijingTime
-
-# Bazi engine (八字)
-import sys as _sys
-_TOOLS_DIR = str(pathlib.Path(__file__).resolve().parent / "tools")
-if _TOOLS_DIR not in _sys.path:
-    _sys.path.insert(0, _TOOLS_DIR)
-from bazi_core import (
+from data.providers import (
+    fetch_stock_yahoo as _fetch_stock_yahoo,
+    fetch_stock_akshare as _fetch_stock_akshare,
+    fetch_stock_sina as _fetch_stock_sina,
+    is_a_share_ticker as _is_a_share_ticker,
+    with_retries as _with_retries,
+    _ticker_to_a_share_code,
+    _ticker_to_sina_symbol,
+    _fetch_52w,
+)
+from trading import decision as dec
+from analysis import advisor as adv
+from analysis import quant
+from analysis import screener
+from tools.bazi_core import (
     BaziCalculator, get_bazi_data, get_lunar_date_string, get_solar_term_info,
     calc_wuyun_liuqi,
 )
@@ -69,20 +76,11 @@ app = Flask(
     template_folder=str(STATIC_DIR),
 )
 
-# Keep a short-lived in-memory cache to avoid repeatedly downloading
-# the full A-share quote table on every ticker request.
-AK_CACHE_DF = None
-AK_CACHE_TS = 0.0
-AK_CACHE_TTL_SECONDS = cfg.AK_CACHE_TTL_SECONDS
+# Keep a short-lived in-memory cache for the stocks snapshot.
 STOCKS_CACHE_DATA = None
 STOCKS_CACHE_TS = 0.0
 STOCKS_CACHE_TTL_SECONDS = cfg.STOCKS_CACHE_TTL_SECONDS
-MAX_FETCH_RETRIES = cfg.MAX_FETCH_RETRIES
-RETRY_BACKOFF_SECONDS = cfg.RETRY_BACKOFF_SECONDS
 
-# 52-week high/low cache — keyed by code, refreshed every 12 hours.
-_52W_CACHE: dict = {}
-_52W_CACHE_TTL = cfg.WEEK52_CACHE_TTL_SECONDS
 NEWS_FEEDS = cfg.NEWS_FEEDS
 SENTIMENT_LAST_KNOWN = dict(cfg.SENTIMENT_DEFAULTS)
 
@@ -207,121 +205,6 @@ GLOSSARY = {
     "fomc": "FOMC 是美联储议息会议，市场会根据其加息/降息路径调整风险偏好。",
 }
 
-# ── Default watchlist (popular A-shares) ─────────────────────────────────────
-DEFAULT_STOCKS = [
-    {"ticker": "600519.SS", "name": "贵州茅台"},
-    {"ticker": "000858.SZ", "name": "五粮液"},
-    {"ticker": "601318.SS", "name": "中国平安"},
-    {"ticker": "600036.SS", "name": "招商银行"},
-    {"ticker": "300750.SZ", "name": "宁德时代"},
-    {"ticker": "000001.SZ", "name": "平安银行"},
-    {"ticker": "600900.SS", "name": "长江电力"},
-    {"ticker": "601857.SS", "name": "中国石油"},
-]
-
-def load_watchlist():
-    if WATCHLIST.exists():
-        return json.loads(WATCHLIST.read_text(encoding="utf-8"))
-    save_watchlist(DEFAULT_STOCKS)
-    return DEFAULT_STOCKS
-
-def save_watchlist(data):
-    WATCHLIST.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def _ticker_to_a_share_code(ticker: str) -> str:
-    """Normalize ticker to a 6-digit A-share code (e.g. 600519.SS -> 600519)."""
-    code = ticker.upper().split(".")[0]
-    return code
-
-
-def _is_a_share_ticker(ticker: str) -> bool:
-    """
-    Detect A-share style tickers:
-    - With suffix: 000001.SZ / 600519.SS
-    - Without suffix: 000001 / 600519
-    """
-    t = ticker.upper()
-    if t.endswith(".SS") or t.endswith(".SZ"):
-        return True
-    return len(t) == 6 and t.isdigit()
-
-
-def _is_retryable_error(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    retry_tokens = [
-        "recv failure",
-        "connection was reset",
-        "connection aborted",
-        "remote end closed",
-        "timeout",
-        "timed out",
-        "temporary failure",
-        "max retries exceeded",
-        "502",
-        "503",
-        "504",
-    ]
-    return any(token in msg for token in retry_tokens)
-
-
-def _with_retries(func):
-    last_exc = None
-    for i in range(MAX_FETCH_RETRIES):
-        try:
-            return func()
-        except Exception as exc:
-            last_exc = exc
-            if i == MAX_FETCH_RETRIES - 1 or not _is_retryable_error(exc):
-                raise
-            time.sleep(RETRY_BACKOFF_SECONDS * (i + 1))
-    raise last_exc
-
-
-def _ticker_to_sina_symbol(ticker: str) -> str:
-    code = _ticker_to_a_share_code(ticker)
-    t = ticker.upper()
-    if t.endswith(".SS"):
-        market = "sh"
-    elif t.endswith(".SZ"):
-        market = "sz"
-    else:
-        market = "sh" if code.startswith(("5", "6", "9")) else "sz"
-    return f"{market}{code}"
-
-
-def _fetch_52w(ticker: str) -> tuple:
-    """Return (high52, low52) using Sina daily K-line (260 trading days ≈ 1 year).
-    Results are cached for 12 hours per ticker."""
-    code = _ticker_to_a_share_code(ticker)
-    now = time.time()
-    cached = _52W_CACHE.get(code)
-    if cached and (now - cached["ts"]) < _52W_CACHE_TTL:
-        return cached["high52"], cached["low52"]
-
-    try:
-        symbol = _ticker_to_sina_symbol(ticker)
-        api = (
-            f"{cfg.SINA_KLINE_API_URL}"
-            f"?symbol={symbol}&scale=240&ma=no&datalen={cfg.TRADING_DAYS_PER_YEAR}"
-        )
-        req = urlrequest.Request(api, headers={"User-Agent": "Mozilla/5.0"})
-        with urlrequest.urlopen(req, timeout=cfg.SINA_KLINE_TIMEOUT) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore")
-
-        data = json.loads(raw)
-        if not data:
-            return None, None
-
-        highs = [float(d.get("high", 0)) for d in data if d.get("high")]
-        lows = [float(d.get("low", 0)) for d in data if d.get("low")]
-        high52 = round(max(highs), 2) if highs else None
-        low52 = round(min(lows), 2) if lows else None
-
-        _52W_CACHE[code] = {"high52": high52, "low52": low52, "ts": now}
-        return high52, low52
-    except Exception:
-        return None, None
 
 
 # ── Market-hours & CSV persistence ────────────────────────────────────────────
@@ -511,174 +394,6 @@ def _get_stocks_snapshot(force_refresh: bool = False) -> list[dict]:
         ]
         STOCKS_CACHE_TS = now
         return STOCKS_CACHE_DATA
-
-
-def _fetch_stock_yahoo(ticker: str, name: str = "") -> dict:
-    """Primary provider: Yahoo Finance via yfinance."""
-    try:
-        def _query():
-            t_local = yf.Ticker(ticker)
-            hist_local = t_local.history(period=cfg.YAHOO_HISTORY_PERIOD, timeout=cfg.YAHOO_TIMEOUT)
-            return t_local, hist_local
-
-        t, hist = _with_retries(_query)
-        if hist.empty:
-            return {"ticker": ticker, "name": name, "error": "无数据"}
-
-        today  = hist.iloc[-1]
-        prev   = hist.iloc[-2] if len(hist) >= 2 else hist.iloc[-1]
-
-        price      = round(float(today["Close"]), 2)
-        prev_close = round(float(prev["Close"]), 2)
-        change     = round(price - prev_close, 2)
-        change_pct = round((change / prev_close) * 100, 2) if prev_close else 0
-        volume     = int(today["Volume"])
-
-        info = t.fast_info
-        high52 = round(float(getattr(info, "fifty_two_week_high", 0) or 0), 2)
-        low52  = round(float(getattr(info, "fifty_two_week_low",  0) or 0), 2)
-        mktcap = getattr(info, "market_cap", None)
-
-        display_name = name or (t.info.get("longName") or t.info.get("shortName") or ticker)
-
-        return {
-            "ticker":     ticker,
-            "name":       display_name,
-            "price":      price,
-            "prev_close": prev_close,
-            "change":     change,
-            "change_pct": change_pct,
-            "volume":     volume,
-            "high52":     high52,
-            "low52":      low52,
-            "market_cap": mktcap,
-            "date":       today.name.date().isoformat(),
-            "source":     "yahoo",
-            "error":      None,
-        }
-    except Exception as e:
-        return {"ticker": ticker, "name": name, "error": str(e)}
-
-
-def _fetch_stock_akshare(ticker: str, name: str = "") -> dict:
-    """
-    Fallback provider for A-shares only.
-    AkShare returns the whole spot table; we cache it briefly and then look up
-    the required symbol locally.
-    """
-    global AK_CACHE_DF, AK_CACHE_TS
-
-    if ak is None:
-        return {"ticker": ticker, "name": name, "error": "AkShare not installed"}
-
-    code = _ticker_to_a_share_code(ticker)
-    now = time.time()
-
-    try:
-        if AK_CACHE_DF is None or (now - AK_CACHE_TS) > AK_CACHE_TTL_SECONDS:
-            AK_CACHE_DF = _with_retries(ak.stock_zh_a_spot_em)
-            AK_CACHE_TS = now
-
-        df = AK_CACHE_DF
-        if df is None or df.empty:
-            return {"ticker": ticker, "name": name, "error": "A股实时数据为空"}
-
-        row_df = df[df["代码"].astype(str) == code]
-        if row_df.empty:
-            return {"ticker": ticker, "name": name, "error": "代码不存在"}
-
-        row = row_df.iloc[0]
-        price = float(row.get("最新价", 0) or 0)
-        change_pct = float(row.get("涨跌幅", 0) or 0)
-        change = float(row.get("涨跌额", 0) or 0)
-        volume = int(float(row.get("成交量", 0) or 0))
-        market_cap = row.get("总市值", None)
-
-        # Reconstruct previous close from price and absolute change.
-        prev_close = round(price - change, 2)
-
-        display_name = name or str(row.get("名称", "")).strip() or ticker
-
-        return {
-            "ticker": ticker,
-            "name": display_name,
-            "price": round(price, 2),
-            "prev_close": prev_close,
-            "change": round(change, 2),
-            "change_pct": round(change_pct, 2),
-            "volume": volume,
-            "high52": None,
-            "low52": None,
-            "market_cap": market_cap,
-            "date": _bj_date_str(),
-            "source": "akshare",
-            "error": None,
-        }
-    except Exception as e:
-        return {"ticker": ticker, "name": name, "error": str(e)}
-
-
-def _fetch_stock_sina(ticker: str, name: str = "") -> dict:
-    """
-    Fallback provider for A-shares only using Sina real-time quote endpoint.
-    This path has no third-party dependency and helps when other providers are flaky.
-    """
-    if not _is_a_share_ticker(ticker):
-        return {"ticker": ticker, "name": name, "error": "not an A-share ticker"}
-
-    symbol = _ticker_to_sina_symbol(ticker)
-    url = f"{cfg.SINA_QUOTE_API_URL}{symbol}"
-    req = urlrequest.Request(
-        url,
-        headers={
-            "Referer": "https://finance.sina.com.cn",
-            "User-Agent": "Mozilla/5.0",
-        },
-    )
-
-    try:
-        def _download():
-            with urlrequest.urlopen(req, timeout=cfg.SINA_QUOTE_TIMEOUT) as resp:
-                return resp.read().decode("gbk", errors="ignore")
-
-        body = _with_retries(_download)
-        match = re.search(r'="([^"]*)"', body)
-        if not match:
-            return {"ticker": ticker, "name": name, "error": "Sina响应格式异常"}
-
-        payload = match.group(1)
-        if not payload:
-            return {"ticker": ticker, "name": name, "error": "Sina返回空数据"}
-
-        parts = payload.split(",")
-        if len(parts) < 32:
-            return {"ticker": ticker, "name": name, "error": "Sina字段不足"}
-
-        display_name = name or parts[0].strip() or ticker
-        price = float(parts[3] or 0)
-        prev_close = float(parts[2] or 0)
-        change = round(price - prev_close, 2)
-        change_pct = round((change / prev_close) * 100, 2) if prev_close else 0
-        volume = int(float(parts[8] or 0))
-        trade_date = parts[30].strip() if len(parts) > 30 else _bj_date_str()
-
-        return {
-            "ticker": ticker,
-            "name": display_name,
-            "price": round(price, 2),
-            "prev_close": round(prev_close, 2),
-            "change": change,
-            "change_pct": change_pct,
-            "volume": volume,
-            "high52": None,
-            "low52": None,
-            "market_cap": None,
-            "date": trade_date,
-            "source": "sina",
-            "error": None,
-        }
-    except Exception as e:
-        return {"ticker": ticker, "name": name, "error": str(e)}
 
 
 def _generate_stock_suggestion(s: dict) -> dict | None:
@@ -1224,13 +939,33 @@ def _fetch_iwencai_count(keyword: str, pattern: str) -> int | None:
         return None
 
 
+def _fetch_up_down_akshare() -> tuple[int | None, int | None]:
+    """Fetch up/down counts via ak.stock_market_activity_legu()."""
+    if ak is None:
+        return None, None
+    try:
+        df = _with_retries(lambda: ak.stock_market_activity_legu())
+        lookup = dict(zip(df["item"], df["value"]))
+        up = int(lookup["上涨"]) if "上涨" in lookup else None
+        down = int(lookup["下跌"]) if "下跌" in lookup else None
+        return up, down
+    except Exception:
+        return None, None
+
+
 def _get_market_sentiment_inputs_auto() -> dict:
     """Auto-fetch four metrics: up/down count, limit-up count, and consecutive-board count."""
     if not _is_cn_trading_session():
         return {"up_count": None, "down_count": None,
                 "limit_up_count": None, "consecutive_limit_count": None}
-    up_count = _fetch_iwencai_count("上涨家数", r"涨跌幅>0%\s*\((\d+)个\)")
-    down_count = _fetch_iwencai_count("下跌家数", r"涨跌幅<0%\s*\((\d+)个\)")
+
+    up_count, down_count = _fetch_up_down_akshare()
+
+    # Fallback to iWenCai if AkShare failed
+    if up_count is None:
+        up_count = _fetch_iwencai_count("上涨家数", r"涨跌幅>0%\s*\((\d+)个\)")
+    if down_count is None:
+        down_count = _fetch_iwencai_count("下跌家数", r"涨跌幅<0%\s*\((\d+)个\)")
 
     limit_up_count = None
     consecutive_limit_count = None
@@ -1520,6 +1255,89 @@ def _fetch_history_closes(ticker: str, days: int) -> list[float]:
         return []
 
 
+# ── Technical signals endpoint ─────────────────────────────────────────────────
+
+def _fetch_history_ohlcv(ticker: str, days: int = 80) -> list[dict]:
+    """Fetch recent OHLCV bars via Sina daily K-line API."""
+    if not _is_a_share_ticker(ticker):
+        return []
+    try:
+        symbol = _ticker_to_sina_symbol(ticker)
+        api = (
+            f"{cfg.SINA_KLINE_API_URL}"
+            f"?symbol={symbol}&scale=240&ma=no&datalen={days}"
+        )
+        req = urlrequest.Request(api, headers={"User-Agent": "Mozilla/5.0"})
+        with urlrequest.urlopen(req, timeout=cfg.SINA_KLINE_TIMEOUT) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+        data = json.loads(raw)
+        if not data:
+            return []
+        return [
+            {
+                "day": d["day"],
+                "open": float(d["open"]),
+                "high": float(d["high"]),
+                "low": float(d["low"]),
+                "close": float(d["close"]),
+                "volume": float(d["volume"]),
+            }
+            for d in data
+            if d.get("close")
+        ]
+    except Exception:
+        return []
+
+
+_SIGNALS_CACHE: dict = {}
+_SIGNALS_CACHE_TTL = 300  # 5 min
+
+@app.route("/api/signals/<path:ticker>")
+def signals(ticker):
+    """Return technical indicators + trading signals for a stock."""
+    ticker = ticker.upper()
+    now = time.time()
+    cached = _SIGNALS_CACHE.get(ticker)
+    if cached and (now - cached["ts"]) < _SIGNALS_CACHE_TTL:
+        return jsonify(cached["data"])
+
+    bars = _fetch_history_ohlcv(ticker, 80)
+    if not bars:
+        return jsonify({"ok": False, "ticker": ticker, "msg": "无历史数据"})
+
+    opens = [b["open"] for b in bars]
+    highs = [b["high"] for b in bars]
+    lows = [b["low"] for b in bars]
+    closes = [b["close"] for b in bars]
+    volumes = [b["volume"] for b in bars]
+
+    result = quant.generate_signals(opens, highs, lows, closes, volumes)
+    result["ok"] = True
+    result["ticker"] = ticker
+    result["last_price"] = closes[-1] if closes else None
+    result["last_day"] = bars[-1]["day"] if bars else None
+
+    _SIGNALS_CACHE[ticker] = {"data": result, "ts": now}
+    return jsonify(result)
+
+
+# ── Stock screener endpoints ──────────────────────────────────────────────────
+
+@app.route("/api/screener/strategies")
+def screener_strategies():
+    """List available screening strategies."""
+    return jsonify({"ok": True, "strategies": screener.list_strategies()})
+
+
+@app.route("/api/screener")
+def screener_scan():
+    """Run a screening strategy. ?strategy=golden_cross&limit=20"""
+    strategy = request.args.get("strategy", "golden_cross")
+    limit = min(int(request.args.get("limit", "20")), 50)
+    result = screener.run_screen(strategy, limit)
+    return jsonify(result)
+
+
 @app.route("/api/quickread", methods=["POST"])
 def quickread():
     body = request.get_json(force=True) or {}
@@ -1742,7 +1560,7 @@ def market_sentiment_auto():
         metrics["consecutive_limit_count"],
     )
     result["inputs_source"] = {
-        "up_down": "iwencai",
+        "up_down": "akshare.stock_market_activity_legu",
         "limit_up": "akshare.stock_zt_pool_em",
     }
     if fallback_fields:
@@ -1908,13 +1726,226 @@ def macro():
     return jsonify(data)
 
 
+# ── Macro history (宏观指标走势) ──────────────────────────────────────────────
+
+_MACRO_HISTORY_CACHE: dict = {}
+_MACRO_HISTORY_TTL = 3600  # 1 hour
+
+_MACRO_SYMBOL_MAP = {
+    "sh000001": "sh000001",
+    "fx_susdcny": "fx_susdcny",
+    "hf_GC": "hf_GC",
+    "hf_CL": "hf_CL",
+}
+
+
+def _fetch_macro_history(symbol: str, days: int = 20) -> list[float]:
+    """Fetch recent close prices for a macro symbol."""
+    now = time.time()
+    cache_key = f"{symbol}_{days}"
+    cached = _MACRO_HISTORY_CACHE.get(cache_key)
+    if cached and (now - cached["ts"]) < _MACRO_HISTORY_TTL:
+        return cached["closes"]
+
+    closes: list[float] = []
+    try:
+        if symbol == "sh000001":
+            # Shanghai index: use Sina K-line (same as stock history)
+            api = (
+                f"{cfg.SINA_KLINE_API_URL}"
+                f"?symbol=sh000001&scale=240&ma=no&datalen={days}"
+            )
+            req = urlrequest.Request(api, headers={"User-Agent": "Mozilla/5.0"})
+            with urlrequest.urlopen(req, timeout=cfg.SINA_KLINE_TIMEOUT) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+            data = json.loads(raw)
+            closes = [round(float(d["close"]), 2) for d in data if d.get("close")]
+
+        elif symbol.startswith("fx_"):
+            # Forex: Sina forex daily K-line (returns pipe-delimited CSV)
+            pair = symbol.replace("fx_s", "").upper()  # "USDCNY"
+            api = (
+                f"https://vip.stock.finance.sina.com.cn/forex/api/jsonp.php"
+                f"/data/NewForexService.getDayKLine?symbol={pair}"
+            )
+            req = urlrequest.Request(api, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://finance.sina.com.cn",
+            })
+            with urlrequest.urlopen(req, timeout=cfg.SINA_KLINE_TIMEOUT) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+            # Response: data("date,open,low,high,close,|date,...")
+            # Extract the string between data(" and ")
+            start = raw.index('("') + 2
+            end = raw.rindex('")')
+            csv_str = raw[start:end]
+            bars = [b.strip() for b in csv_str.split("|") if b.strip()]
+            all_closes = []
+            for bar in bars:
+                parts = bar.split(",")
+                if len(parts) >= 5:
+                    all_closes.append(round(float(parts[4]), 4))
+            closes = all_closes[-days:]
+
+        elif symbol.startswith("hf_"):
+            # Commodities: Sina futures daily K-line
+            code = symbol.replace("hf_", "")  # "GC" or "CL"
+            api = (
+                f"https://stock2.finance.sina.com.cn/futures/api/jsonp.php"
+                f"/data/GlobalFuturesService.getGlobalFuturesDailyKLine"
+                f"?symbol={code}"
+            )
+            req = urlrequest.Request(api, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://finance.sina.com.cn",
+            })
+            with urlrequest.urlopen(req, timeout=cfg.SINA_KLINE_TIMEOUT) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+            json_str = raw[raw.index("["):raw.rindex("]") + 1]
+            data = json.loads(json_str)
+            closes = [round(float(d["close"]), 2) for d in data[-days:] if d.get("close")]
+
+    except Exception as e:
+        logging.warning("macro-history %s failed: %s", symbol, e)
+        return []
+
+    _MACRO_HISTORY_CACHE[cache_key] = {"closes": closes, "ts": now}
+    return closes
+
+
+@app.route("/api/macro-history/<path:symbol>")
+def macro_history(symbol):
+    """Return recent closes for a macro indicator for sparkline rendering."""
+    if symbol not in _MACRO_SYMBOL_MAP:
+        return jsonify({"ok": False, "error": "unknown symbol"}), 400
+    days = min(int(request.args.get("days", 20)), 260)
+    closes = _fetch_macro_history(symbol, days)
+    return jsonify({"ok": bool(closes), "symbol": symbol, "closes": closes})
+
+
 # ── Risk events (黑天鹅 / 灰犀牛) ────────────────────────────────────────────
 
 _RISK_EVENT_HISTORY: list[dict] = []  # in-memory event log
 
+# Keyword rules for auto-detecting major news from CLS/CCTV feeds.
+# Each rule: (keywords_any, type, severity, direction, source, duration, affected_sectors)
+_NEWS_KEYWORD_RULES = [
+    # Geopolitical — foreign leaders visiting China
+    (["访华", "国事访问", "元首会晤", "首脑会谈"],
+     "灰犀牛", "medium", "ambiguous", "geopolitical", "short", ["消费", "军工", "科技"]),
+    # Trade war / tariffs
+    (["贸易战", "加征关税", "关税壁垒", "贸易摩擦", "贸易制裁"],
+     "灰犀牛", "high", "bearish", "geopolitical", "medium", ["出口", "科技", "农业"]),
+    # Chip / tech sanctions
+    (["芯片制裁", "芯片禁令", "实体清单", "出口管制", "技术封锁"],
+     "灰犀牛", "high", "bearish", "geopolitical", "long", ["半导体", "科技"]),
+    # Monetary policy — rate cut / RRR cut
+    (["降准", "降息", "下调存款准备金", "LPR下调"],
+     "灰犀牛", "medium", "bullish", "policy", "medium", ["银行", "地产", "券商"]),
+    # Stamp duty
+    (["印花税", "证券交易印花税"],
+     "黑天鹅", "high", "bullish", "policy", "flash", ["券商", "全市场"]),
+    # IPO policy
+    (["IPO暂停", "暂缓IPO", "IPO收紧", "暂停新股发行"],
+     "灰犀牛", "medium", "bullish", "policy", "short", ["券商", "次新股"]),
+    # Real estate crisis
+    (["暴雷", "债务违约", "停工停贷", "房企违约"],
+     "灰犀牛", "high", "bearish", "sector", "medium", ["地产", "银行", "建材"]),
+    # War / military conflict
+    (["战争", "军事冲突", "武装冲突", "开战", "空袭"],
+     "黑天鹅", "critical", "bearish", "external", "short", ["全市场", "军工", "黄金"]),
+    # Pandemic
+    (["疫情爆发", "新冠", "封城", "大流行"],
+     "黑天鹅", "high", "bearish", "external", "long", ["全市场", "医药"]),
+]
+
+
+def _scan_news_events() -> list[dict]:
+    """Scan CLS (财联社) flash news + CCTV news for keyword-matched events."""
+    events = []
+    if ak is None:
+        return events
+
+    now_str = _bj_now().strftime("%Y-%m-%d %H:%M")
+    seen_titles: set[str] = set()
+
+    # --- Source 1: CLS 财联社 real-time flash news ---
+    try:
+        df = _with_retries(lambda: ak.stock_info_global_cls())
+        if df is not None and not df.empty:
+            for _, row in df.head(30).iterrows():
+                title = str(row.get("标题", ""))
+                content = str(row.get("内容", ""))
+                text = title + content
+
+                for keywords, evt_type, severity, direction, source, duration, sectors in _NEWS_KEYWORD_RULES:
+                    if any(kw in text for kw in keywords):
+                        evt_title = title[:100] if title else content[:100]
+                        if evt_title in seen_titles:
+                            break
+                        seen_titles.add(evt_title)
+                        detail = content[:200] if content else ""
+                        events.append({
+                            "type": evt_type,
+                            "source": source,
+                            "severity": severity,
+                            "direction": direction,
+                            "duration": duration,
+                            "title": evt_title,
+                            "detail": detail,
+                            "affected_sectors": sectors,
+                            "time": now_str,
+                            "auto_detected": True,
+                        })
+                        break
+    except Exception:
+        pass
+
+    # --- Source 2: CCTV news (political / state visits / policy) ---
+    # Check today + yesterday (CCTV publishes evening news, may be empty early)
+    try:
+        bj = _bj_now()
+        cctv_dates = [bj.strftime("%Y%m%d"), (bj - timedelta(days=1)).strftime("%Y%m%d")]
+        for cctv_date in cctv_dates:
+            try:
+                df2 = _with_retries(lambda d=cctv_date: ak.news_cctv(date=d))
+            except Exception:
+                continue
+            if df2 is None or df2.empty:
+                continue
+            for _, row in df2.head(20).iterrows():
+                title = str(row.get("title", ""))
+                content = str(row.get("content", ""))
+                text = title + content
+
+                for keywords, evt_type, severity, direction, source, duration, sectors in _NEWS_KEYWORD_RULES:
+                    if any(kw in text for kw in keywords):
+                        evt_title = title[:100] if title else content[:100]
+                        if evt_title in seen_titles:
+                            break
+                        seen_titles.add(evt_title)
+                        detail = content[:200] if content else ""
+                        events.append({
+                            "type": evt_type,
+                            "source": source,
+                            "severity": severity,
+                            "direction": direction,
+                            "duration": duration,
+                            "title": f"[CCTV] {evt_title}",
+                            "detail": detail,
+                            "affected_sectors": sectors,
+                            "time": now_str,
+                            "auto_detected": True,
+                        })
+                        break
+    except Exception:
+        pass
+
+    return events
+
 
 def _scan_risk_events() -> list[dict]:
-    """Scan macro + stock data for Black Swan / Grey Rhino signals."""
+    """Scan macro + stock + news data for Black Swan / Grey Rhino signals."""
     events: list[dict] = []
     now_str = _bj_now().strftime("%Y-%m-%d %H:%M")
 
@@ -1984,7 +2015,14 @@ def _scan_risk_events() -> list[dict]:
     except Exception:
         pass
 
-    # 3) Persist new events (deduplicate by title within same hour)
+    # 3) Auto-detect major news from CLS feed
+    try:
+        news_events = _scan_news_events()
+        events.extend(news_events)
+    except Exception:
+        pass
+
+    # 5) Persist new events (deduplicate by title within same hour)
     existing_keys = {(e["title"], e["time"][:13]) for e in _RISK_EVENT_HISTORY}
     for e in events:
         key = (e["title"], e["time"][:13])
@@ -1992,7 +2030,7 @@ def _scan_risk_events() -> list[dict]:
             _RISK_EVENT_HISTORY.append(e)
             existing_keys.add(key)
 
-    # 4) Trim old events: drop entries older than max_age_days, cap total count
+    # 6) Trim old events: drop entries older than max_age_days, cap total count
     cutoff_age = (_bj_now() - timedelta(days=cfg.RISK_EVENT_MAX_AGE_DAYS)).strftime("%Y-%m-%d %H:%M")
     _RISK_EVENT_HISTORY[:] = [
         e for e in _RISK_EVENT_HISTORY if e["time"] >= cutoff_age
@@ -2034,11 +2072,65 @@ def risk_events():
     })
 
 
+_VALID_RISK_TYPES = {"黑天鹅", "灰犀牛"}
+_VALID_SEVERITIES = {"critical", "high", "medium", "low"}
+_VALID_DIRECTIONS = {"bullish", "bearish", "ambiguous"}
+_VALID_SOURCES = {"geopolitical", "policy", "macro_shock", "sector", "company", "external"}
+_VALID_DURATIONS = {"flash", "short", "medium", "long"}
+
+
+@app.route("/api/risk-events", methods=["POST"])
+def risk_events_add():
+    """Manually add a risk event."""
+    data = request.get_json(force=True, silent=True) or {}
+    title = (data.get("title") or "").strip()
+    if not title:
+        return jsonify({"ok": False, "msg": "标题不能为空"})
+    if len(title) > 200:
+        return jsonify({"ok": False, "msg": "标题过长"})
+
+    evt_type = data.get("type", "灰犀牛")
+    if evt_type not in _VALID_RISK_TYPES:
+        evt_type = "灰犀牛"
+    severity = data.get("severity", "medium")
+    if severity not in _VALID_SEVERITIES:
+        severity = "medium"
+    direction = data.get("direction", "ambiguous")
+    if direction not in _VALID_DIRECTIONS:
+        direction = "ambiguous"
+    source = data.get("source", "geopolitical")
+    if source not in _VALID_SOURCES:
+        source = "geopolitical"
+    duration = data.get("duration", "short")
+    if duration not in _VALID_DURATIONS:
+        duration = "short"
+
+    detail = (data.get("detail") or "").strip()[:500]
+    sectors = data.get("affected_sectors") or []
+    if isinstance(sectors, str):
+        sectors = [s.strip() for s in sectors.split(",") if s.strip()]
+
+    event = {
+        "type": evt_type,
+        "source": source,
+        "severity": severity,
+        "direction": direction,
+        "duration": duration,
+        "title": title,
+        "detail": detail,
+        "affected_sectors": sectors[:10],
+        "time": _bj_now().strftime("%Y-%m-%d %H:%M"),
+        "auto_detected": False,
+    }
+    _RISK_EVENT_HISTORY.append(event)
+    return jsonify({"ok": True, "event": event})
+
+
 # ── Bazi (八字) endpoint ──────────────────────────────────────────────────────
 
 @app.route("/api/bazi", methods=["GET"])
 def bazi():
-    now = datetime.now()
+    now = _bj_now().replace(tzinfo=None)
     weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
     # Lunar
@@ -2130,6 +2222,234 @@ def auto_select_provider():
             new_order.append(r["provider"])
     _preferred_provider_order = new_order
     return jsonify({"ok": True, "order": _preferred_provider_order, "results": results})
+
+
+# ── 新股新债 (IPO & convertible bond subscription) ─────────────────────────────
+
+_XGXZ_CACHE: dict | None = None
+_XGXZ_CACHE_DATE: str = ""
+
+
+def _fetch_xingu_xinzhai() -> dict:
+    """Fetch upcoming IPO + convertible bond data from East Money."""
+    global _XGXZ_CACHE, _XGXZ_CACHE_DATE
+    today = _bj_now().strftime("%Y-%m-%d")
+    if _XGXZ_CACHE and _XGXZ_CACHE_DATE == today:
+        return _XGXZ_CACHE
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://data.eastmoney.com",
+    }
+    ipo_list: list[dict] = []
+    bond_list: list[dict] = []
+
+    # ── 新股 (IPO) ──
+    try:
+        ipo_url = (
+            "https://datacenter-web.eastmoney.com/api/data/v1/get?"
+            "sortColumns=APPLY_DATE&sortTypes=-1&pageSize=20&pageNumber=1"
+            "&reportName=RPTA_APP_IPOAPPLY"
+            "&columns=SECURITY_CODE,SECURITY_NAME,APPLY_DATE,ISSUE_PRICE,ONLINE_ISSUE_LWR,INITIAL_MULTIPLE"
+            "&source=WEB&client=WEB"
+        )
+        req = urlrequest.Request(ipo_url, headers=headers)
+        with urlrequest.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        if data.get("success") and data.get("result", {}).get("data"):
+            for row in data["result"]["data"]:
+                apply_date = (row.get("APPLY_DATE") or "")[:10]
+                ipo_list.append({
+                    "code": row.get("SECURITY_CODE", ""),
+                    "name": row.get("SECURITY_NAME", ""),
+                    "apply_date": apply_date,
+                    "price": row.get("ISSUE_PRICE"),
+                    "win_rate": row.get("ONLINE_ISSUE_LWR"),
+                    "multiple": row.get("INITIAL_MULTIPLE"),
+                })
+    except Exception as e:
+        logging.warning("新股 fetch failed: %s", e)
+
+    # ── 新债 (convertible bond) ──
+    try:
+        bond_url = (
+            "https://datacenter-web.eastmoney.com/api/data/v1/get?"
+            "sortColumns=PUBLIC_START_DATE&sortTypes=-1&pageSize=20&pageNumber=1"
+            "&reportName=RPT_BOND_CB_LIST"
+            "&columns=SECURITY_CODE,SECURITY_NAME_ABBR,CORRECODE_NAME_ABBR,"
+            "PUBLIC_START_DATE,LISTING_DATE,ONLINE_GENERAL_LWR"
+            "&source=WEB&client=WEB"
+        )
+        req = urlrequest.Request(bond_url, headers=headers)
+        with urlrequest.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        if data.get("success") and data.get("result", {}).get("data"):
+            for row in data["result"]["data"]:
+                apply_date = (row.get("PUBLIC_START_DATE") or "")[:10]
+                list_date = (row.get("LISTING_DATE") or "")[:10]
+                bond_list.append({
+                    "code": row.get("SECURITY_CODE", ""),
+                    "name": row.get("SECURITY_NAME_ABBR", ""),
+                    "apply_name": row.get("CORRECODE_NAME_ABBR", ""),
+                    "apply_date": apply_date,
+                    "list_date": list_date,
+                    "win_rate": row.get("ONLINE_GENERAL_LWR"),
+                })
+    except Exception as e:
+        logging.warning("新债 fetch failed: %s", e)
+
+    # Only keep items from last 3 days + future, cap at 8 per section
+    cutoff = (_bj_now() - timedelta(days=3)).strftime("%Y-%m-%d")
+    ipo_list = [r for r in ipo_list if (r["apply_date"] or "") >= cutoff][:8]
+    bond_list = [r for r in bond_list if (r["apply_date"] or "") >= cutoff][:8]
+
+    result = {"ok": True, "date": today, "ipo": ipo_list, "bond": bond_list}
+    _XGXZ_CACHE = result
+    _XGXZ_CACHE_DATE = today
+    return result
+
+
+@app.route("/api/xingu-xinzhai", methods=["GET"])
+def xingu_xinzhai():
+    return jsonify(_fetch_xingu_xinzhai())
+
+
+# ── Decision Journal ──────────────────────────────────────────────────────────
+
+@app.route("/api/decisions", methods=["GET"])
+def list_decisions():
+    dtype = request.args.get("type")
+    state = request.args.get("state")
+    return jsonify({"ok": True, "decisions": dec.list_decisions(dtype, state)})
+
+
+@app.route("/api/decisions", methods=["POST"])
+def create_decision():
+    data = request.get_json(force=True, silent=True) or {}
+    title = (data.get("title") or "").strip()
+    if not title:
+        return jsonify({"ok": False, "error": "title is required"}), 400
+    try:
+        d = dec.create_decision(
+            title=title,
+            dtype=data.get("type", "trade"),
+            context=data.get("context", ""),
+            action=data.get("action", ""),
+            outcome=data.get("outcome", ""),
+            tags=data.get("tags", []),
+            state=data.get("state", "idea"),
+        )
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    return jsonify({"ok": True, "decision": d}), 201
+
+
+@app.route("/api/decisions/<did>", methods=["PUT"])
+def update_decision(did):
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        d = dec.update_decision(did, data)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    if d is None:
+        return jsonify({"ok": False, "error": "not found"}), 404
+    return jsonify({"ok": True, "decision": d})
+
+
+@app.route("/api/decisions/<did>", methods=["DELETE"])
+def delete_decision(did):
+    if dec.delete_decision(did):
+        return jsonify({"ok": True})
+    return jsonify({"ok": False, "error": "not found"}), 404
+
+
+# ── Advisor (参谋模块) ─────────────────────────────────────────────────────
+
+@app.route("/api/advisor", methods=["GET"])
+def advisor_endpoint():
+    risk_pref = request.args.get("risk_pref", "balanced")
+
+    # Gather positions from frontend (sent as query param JSON)
+    raw_positions = request.args.get("positions", "[]")
+    try:
+        client_positions = json.loads(raw_positions)
+    except (json.JSONDecodeError, TypeError):
+        client_positions = []
+
+    # Get stock data
+    rows = _get_stocks_snapshot()
+    stock_map = {r["ticker"]: r for r in rows if not r.get("error")}
+
+    # Build PositionInput list
+    positions: list[adv.PositionInput] = []
+    for p in client_positions:
+        ticker = p.get("ticker", "")
+        stock = stock_map.get(ticker, {})
+        positions.append(adv.PositionInput(
+            ticker=ticker,
+            name=stock.get("name", p.get("name", ticker)),
+            shares=int(p.get("shares", 0)),
+            cost=float(p.get("cost", 0)),
+            price=float(stock.get("price", 0)),
+            change_pct=float(stock.get("change_pct", 0)),
+            high52=stock.get("high52"),
+            low52=stock.get("low52"),
+            volume=int(stock.get("volume", 0)),
+        ))
+
+    # Build market context
+    brief = _build_auto_brief()
+    regime = brief.get("snapshot", {}).get("regime", "震荡")
+
+    ai = _build_ai_edge_report()
+    confidence = ai.get("summary", {}).get("confidence", 50.0)
+
+    # Sentiment: use last known from history
+    sentiment_stage = "分歧"
+    sentiment_score = 0
+    tradable = True
+    history = _load_sentiment_history()
+    if history:
+        last = history[-1]
+        sentiment_stage = last.get("stage", "分歧")
+        sentiment_score = last.get("score", 0)
+        tradable = sentiment_stage == "上升"
+
+    ctx = adv.MarketContext(
+        regime=regime,
+        sentiment_stage=sentiment_stage,
+        sentiment_score=sentiment_score,
+        tradable=tradable,
+        confidence=confidence,
+        risk_events=_RISK_EVENT_HISTORY[-20:],
+    )
+
+    result = adv.evaluate_portfolio(positions, ctx, risk_pref)
+    return jsonify({
+        "ok": result.ok,
+        "generated_at": result.generated_at,
+        "strategy": result.strategy_name,
+        "portfolio_action": result.portfolio_action,
+        "portfolio_reason": result.portfolio_reason,
+        "signals": [
+            {
+                "ticker": s.ticker,
+                "name": s.name,
+                "action": s.action,
+                "strength": s.strength,
+                "reasons": s.reasons,
+                "stop_loss": s.stop_loss,
+                "take_profit": s.take_profit,
+            }
+            for s in result.signals
+        ],
+        "context": {
+            "regime": regime,
+            "sentiment_stage": sentiment_stage,
+            "confidence": confidence,
+        },
+        "msg": result.msg,
+    })
 
 
 # ── Serve frontend ────────────────────────────────────────────────────────────

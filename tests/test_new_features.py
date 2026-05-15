@@ -195,6 +195,95 @@ class TestMacroEndpoint:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# /api/macro-history endpoint
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestMacroHistoryEndpoint:
+
+    @pytest.fixture(autouse=True)
+    def _reset_macro_history_cache(self):
+        stock_app._MACRO_HISTORY_CACHE.clear()
+        yield
+
+    def test_unknown_symbol_returns_400(self, client):
+        rv = client.get("/api/macro-history/INVALID")
+        assert rv.status_code == 400
+
+    def test_sh000001_returns_closes(self, client):
+        fake_kline = json.dumps([
+            {"day": "2026-05-01", "close": "3350.00"},
+            {"day": "2026-05-02", "close": "3360.00"},
+            {"day": "2026-05-03", "close": "3370.00"},
+        ]).encode("utf-8")
+        with patch.object(stock_app.urlrequest, "urlopen") as mock_open:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = fake_kline
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_open.return_value = mock_resp
+
+            rv = client.get("/api/macro-history/sh000001")
+            data = rv.get_json()
+            assert data["ok"] is True
+            assert data["symbol"] == "sh000001"
+            assert len(data["closes"]) == 3
+            assert data["closes"] == [3350.0, 3360.0, 3370.0]
+
+    def test_hf_GC_returns_closes(self, client):
+        # Sina futures JSONP response format
+        fake_raw = 'data([{"date":"2026-05-01","close":"2350.00"},{"date":"2026-05-02","close":"2360.00"}])'
+        with patch.object(stock_app.urlrequest, "urlopen") as mock_open:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = fake_raw.encode("utf-8")
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_open.return_value = mock_resp
+
+            rv = client.get("/api/macro-history/hf_GC")
+            data = rv.get_json()
+            assert data["ok"] is True
+            assert len(data["closes"]) == 2
+
+    def test_fx_susdcny_returns_closes(self, client):
+        # Sina forex returns pipe-delimited CSV: date,open,low,high,close
+        fake_raw = 'data("2026-05-01,7.2100,7.2000,7.2200,7.2150,|2026-05-02,7.2150,7.2050,7.2300,7.2200,");'
+        with patch.object(stock_app.urlrequest, "urlopen") as mock_open:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = fake_raw.encode("utf-8")
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_open.return_value = mock_resp
+
+            rv = client.get("/api/macro-history/fx_susdcny")
+            data = rv.get_json()
+            assert data["ok"] is True
+            assert len(data["closes"]) == 2
+            assert data["closes"] == [7.215, 7.22]
+
+    def test_network_error_returns_empty(self, client):
+        with patch.object(stock_app.urlrequest, "urlopen", side_effect=Exception("timeout")):
+            rv = client.get("/api/macro-history/sh000001")
+            data = rv.get_json()
+            assert data["ok"] is False
+            assert data["closes"] == []
+
+    def test_cache_hit(self, client):
+        fake_kline = json.dumps([
+            {"day": "2026-05-01", "close": "3350.00"},
+        ]).encode("utf-8")
+        with patch.object(stock_app.urlrequest, "urlopen") as mock_open:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = fake_kline
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_open.return_value = mock_resp
+
+            client.get("/api/macro-history/sh000001")
+            client.get("/api/macro-history/sh000001")
+            assert mock_open.call_count == 1
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # /api/risk-events endpoint
 # ══════════════════════════════════════════════════════════════════════════════
 

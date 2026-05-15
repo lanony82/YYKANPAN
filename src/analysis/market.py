@@ -9,7 +9,7 @@ from urllib import request as urlrequest
 
 from config import cfg
 from time_utils import BeijingTime
-from providers import with_retries, fetch_stock
+from data.providers import with_retries, fetch_stock
 
 try:
     import akshare as ak
@@ -146,7 +146,7 @@ _HISTORY_CACHE_TTL = cfg.HISTORY_CACHE_TTL_SECONDS
 
 
 def get_history(ticker: str, days: int) -> dict:
-    from providers import fetch_history_closes
+    from data.providers import fetch_history_closes
     ticker = ticker.upper()
     now = time.time()
     cache_key = f"{ticker}_{days}"

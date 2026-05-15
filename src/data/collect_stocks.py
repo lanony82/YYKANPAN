@@ -13,8 +13,13 @@ import sys
 import csv
 import pathlib
 
-from config import cfg
-from server import fetch_stock, load_watchlist
+# Allow running as standalone script: python src/data/collect_stocks.py
+_SRC_DIR = str(pathlib.Path(__file__).resolve().parent.parent)
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
+
+from config import cfg, load_watchlist
+from data.providers import fetch_stock
 from time_utils import BeijingTime
 
 

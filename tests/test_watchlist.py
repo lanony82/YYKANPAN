@@ -14,6 +14,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import server as stock_app
+from config import cfg
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -24,6 +25,7 @@ def client(tmp_path, monkeypatch):
     wl_path = tmp_path / "watchlist_cn.json"
     wl_path.write_text("[]", encoding="utf-8")
     monkeypatch.setattr(stock_app, "WATCHLIST", wl_path)
+    monkeypatch.setattr(cfg, "WATCHLIST_PATH", wl_path)
     stock_app._invalidate_stocks_cache()
     stock_app.app.config["TESTING"] = True
     with stock_app.app.test_client() as c:

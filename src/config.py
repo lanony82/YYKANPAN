@@ -9,6 +9,7 @@ Usage:
     timeout = cfg.SINA_QUOTE_TIMEOUT
 """
 
+import json
 import os
 import pathlib
 
@@ -123,3 +124,31 @@ class _Config:
 
 
 cfg = _Config()
+
+
+# ── Default watchlist (popular A-shares) ─────────────────────────────────────
+DEFAULT_STOCKS = [
+    {"ticker": "600519.SS", "name": "贵州茅台"},
+    {"ticker": "000858.SZ", "name": "五粮液"},
+    {"ticker": "601318.SS", "name": "中国平安"},
+    {"ticker": "600036.SS", "name": "招商银行"},
+    {"ticker": "300750.SZ", "name": "宁德时代"},
+    {"ticker": "000001.SZ", "name": "平安银行"},
+    {"ticker": "600900.SS", "name": "长江电力"},
+    {"ticker": "601857.SS", "name": "中国石油"},
+]
+
+
+def load_watchlist():
+    """Load the watchlist from JSON; create default if missing."""
+    if cfg.WATCHLIST_PATH.exists():
+        return json.loads(cfg.WATCHLIST_PATH.read_text(encoding="utf-8"))
+    save_watchlist(DEFAULT_STOCKS)
+    return list(DEFAULT_STOCKS)
+
+
+def save_watchlist(data):
+    """Persist the watchlist to JSON."""
+    cfg.WATCHLIST_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )

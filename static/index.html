@@ -101,7 +101,14 @@
   </div>
 
   <div class="insight-card" data-card-id="macro" draggable="true">
-    <h3><span class="drag-handle">⠿</span> 宏观风向标<button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
+    <h3><span class="drag-handle">⠿</span> 宏观风向标
+      <span class="macro-period-tabs" id="macro-period-tabs">
+        <button class="macro-period-btn" data-days="5">1W</button>
+        <button class="macro-period-btn active" data-days="20">1M</button>
+        <button class="macro-period-btn" data-days="60">3M</button>
+        <button class="macro-period-btn" data-days="250">1Y</button>
+      </span>
+      <button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
     <div class="macro-bar" id="macro-bar">
       <span class="macro-loading">加载中…</span>
     </div>
@@ -221,6 +228,30 @@
     </div>
   </div>
 
+  <div class="insight-card" data-card-id="xgxz" draggable="true">
+    <h3><span class="drag-handle">⠇</span> 新股新债 <span class="ai-badge" style="background:rgba(33,150,243,.15);color:#2196f3">打新</span><button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
+    <div id="xgxz-body" class="xgxz-body card-scroll-x scroll-hint">
+      <span class="macro-loading">加载中…</span>
+    </div>
+  </div>
+
+  <!-- Advisor Card -->
+  <div class="insight-card" data-card-id="advisor" draggable="true">
+    <h3><span class="drag-handle">⠇</span> 参谋信号 <span class="ai-badge" style="background:rgba(103,58,183,.15);color:#7c4dff">Advisor</span><button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
+    <div class="advisor-controls">
+      <select id="advisor-risk-pref" title="风险偏好">
+        <option value="conservative">保守</option>
+        <option value="balanced" selected>均衡</option>
+        <option value="aggressive">激进</option>
+      </select>
+      <button id="btn-advisor-run">🧠 评估</button>
+      <span id="advisor-status" class="advisor-status"></span>
+    </div>
+    <div id="advisor-body" class="advisor-body">
+      <div class="advisor-empty">设置持仓后点击「评估」获取交易信号</div>
+    </div>
+  </div>
+
   <div class="insight-card" data-card-id="risk-events" draggable="true">
     <h3><span class="drag-handle">⠇</span> 黑天鹅 / 灰犀牛 <span class="ai-badge" style="background:rgba(244,67,54,.15);color:#f44336">风险雷达</span><button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
     <div class="risk-controls">
@@ -234,9 +265,135 @@
       <button id="btn-risk-refresh">🔍 扫描</button>
       <span id="risk-count" class="risk-count"></span>
     </div>
+    <details class="risk-add-wrap">
+      <summary>＋ 手动录入事件</summary>
+      <div class="risk-add-form">
+        <input id="risk-inp-title" type="text" placeholder="事件标题 *（如：特朗普访华）" maxlength="200" />
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px 6px;">
+          <select id="risk-inp-type" title="类型">
+            <option value="灰犀牛">灰犀牛</option>
+            <option value="黑天鹅">黑天鹅</option>
+          </select>
+          <select id="risk-inp-severity" title="严重级别">
+            <option value="low">低 low</option>
+            <option value="medium" selected>中 medium</option>
+            <option value="high">高 high</option>
+            <option value="critical">极端 critical</option>
+          </select>
+          <select id="risk-inp-direction" title="方向">
+            <option value="ambiguous" selected>方向不明</option>
+            <option value="bullish">利好 ↑</option>
+            <option value="bearish">利空 ↓</option>
+          </select>
+          <select id="risk-inp-source" title="来源分类">
+            <option value="geopolitical">地缘政治</option>
+            <option value="policy">国内政策</option>
+            <option value="macro_shock">宏观冲击</option>
+            <option value="sector">行业事件</option>
+            <option value="company">个股事件</option>
+            <option value="external">外部冲击</option>
+          </select>
+          <select id="risk-inp-duration" title="影响时长">
+            <option value="flash">闪电 1~3日</option>
+            <option value="short" selected>短期 1~2周</option>
+            <option value="medium">中期 1~3月</option>
+            <option value="long">长期 季度+</option>
+          </select>
+        </div>
+        <input id="risk-inp-sectors" type="text" placeholder="受影响板块（逗号分隔，如：半导体,军工,消费）" />
+        <textarea id="risk-inp-detail" placeholder="详细描述（可选）" rows="2"></textarea>
+        <button id="btn-risk-add">📝 录入</button>
+        <span id="risk-add-msg" style="font-size:.78rem;color:var(--muted);margin-top:2px;"></span>
+      </div>
+    </details>
     <div id="risk-events-list" class="risk-events-list">
       <div class="risk-empty">点击「扫描」检测异动事件</div>
     </div>
+  </div>
+
+  <!-- Stock Screener -->
+  <div class="insight-card" data-card-id="screener" draggable="true">
+    <h3><span class="drag-handle">⠇</span> 选股雷达 <span class="ai-badge" style="background:rgba(255,152,0,.15);color:#ff9800">Screener</span><button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
+    <div class="screener-controls">
+      <select id="sel-screener-strategy" title="选股策略"></select>
+      <button id="btn-screener-run">🔎 扫描</button>
+      <span id="screener-status" class="screener-status"></span>
+    </div>
+    <div id="screener-results" class="screener-results card-scroll-x scroll-hint">
+      <div class="screener-empty">选择策略后点击「扫描」</div>
+    </div>
+  </div>
+
+  <!-- Decision Journal -->
+  <div class="insight-card insight-card--wide" data-card-id="decisions" draggable="true">
+    <h3><span class="drag-handle">⠇</span> 决策日志 <span class="ai-badge" style="background:rgba(56,139,253,.15);color:#388bfd">Decision Journal</span><button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
+
+    <!-- New decision form (collapsible) -->
+    <details id="decision-form-wrap" class="decision-form-wrap">
+      <summary>＋ 新决策</summary>
+      <div class="decision-form">
+        <input id="dec-title" type="text" placeholder="决策标题 *" maxlength="120" />
+        <div class="dec-row">
+          <select id="dec-type">
+            <option value="trade">交易 Trade</option>
+            <option value="life">生活 Life</option>
+            <option value="work">工作 Work</option>
+          </select>
+          <select id="dec-state">
+            <option value="idea">💡 想法</option>
+            <option value="decided">✅ 已决</option>
+            <option value="acted">🚀 已执行</option>
+            <option value="reviewed">📝 已复盘</option>
+          </select>
+        </div>
+        <textarea id="dec-context" placeholder="当时环境（价格/市场/情绪）" rows="2"></textarea>
+        <textarea id="dec-action" placeholder="做了什么 / 打算做什么" rows="2"></textarea>
+        <textarea id="dec-outcome" placeholder="结果（可后续补充）" rows="2"></textarea>
+        <input id="dec-tags" type="text" placeholder="标签 用逗号分隔 (breakout, fomo, revenge…)" />
+        <div class="dec-actions">
+          <button id="btn-dec-save">💾 保存</button>
+          <span id="dec-msg"></span>
+        </div>
+      </div>
+    </details>
+
+    <!-- Filter bar -->
+    <div class="dec-filter-bar">
+      <select id="dec-filter-type">
+        <option value="">全部类型</option>
+        <option value="trade">交易</option>
+        <option value="life">生活</option>
+        <option value="work">工作</option>
+      </select>
+      <div class="dec-view-toggle">
+        <button class="dec-view-btn active" data-view="kanban" title="看板视图">▦</button>
+        <button class="dec-view-btn" data-view="list" title="列表视图">☰</button>
+      </div>
+      <span id="dec-total" class="dec-total"></span>
+    </div>
+
+    <!-- Kanban board -->
+    <div id="dec-kanban" class="dec-kanban">
+      <div class="dec-kanban-col" data-state="idea">
+        <div class="dec-col-head">💡 想法</div>
+        <div class="dec-col-body" data-state="idea"></div>
+      </div>
+      <div class="dec-kanban-col" data-state="decided">
+        <div class="dec-col-head">✅ 已决</div>
+        <div class="dec-col-body" data-state="decided"></div>
+      </div>
+      <div class="dec-kanban-col" data-state="acted">
+        <div class="dec-col-head">🚀 已执行</div>
+        <div class="dec-col-body" data-state="acted"></div>
+      </div>
+      <div class="dec-kanban-col" data-state="reviewed">
+        <div class="dec-col-head">📝 已复盘</div>
+        <div class="dec-col-body" data-state="reviewed"></div>
+      </div>
+    </div>
+
+    <!-- List view (hidden by default) -->
+    <div id="dec-list-view" class="dec-list-view" style="display:none"></div>
   </div>
 
 </div>

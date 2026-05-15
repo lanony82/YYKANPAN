@@ -7,7 +7,7 @@ import pathlib
 
 from config import cfg
 from time_utils import BeijingTime
-from providers import with_retries
+from data.providers import with_retries
 
 try:
     import akshare as ak
@@ -245,10 +245,29 @@ def _fetch_iwencai_count(keyword: str, pattern: str) -> int | None:
         return None
 
 
+def _fetch_up_down_akshare() -> tuple[int | None, int | None]:
+    """Fetch up/down counts via ak.stock_market_activity_legu()."""
+    if ak is None:
+        return None, None
+    try:
+        df = with_retries(lambda: ak.stock_market_activity_legu())
+        lookup = dict(zip(df["item"], df["value"]))
+        up = int(lookup["上涨"]) if "上涨" in lookup else None
+        down = int(lookup["下跌"]) if "下跌" in lookup else None
+        return up, down
+    except Exception:
+        return None, None
+
+
 def get_market_sentiment_inputs_auto() -> dict:
     """Auto-fetch four metrics: up/down count, limit-up count, and consecutive-board count."""
-    up_count = _fetch_iwencai_count("上涨家数", r"涨跌幅>0%\s*\((\d+)个\)")
-    down_count = _fetch_iwencai_count("下跌家数", r"涨跌幅<0%\s*\((\d+)个\)")
+    up_count, down_count = _fetch_up_down_akshare()
+
+    # Fallback to iWenCai if AkShare failed
+    if up_count is None:
+        up_count = _fetch_iwencai_count("上涨家数", r"涨跌幅>0%\s*\((\d+)个\)")
+    if down_count is None:
+        down_count = _fetch_iwencai_count("下跌家数", r"涨跌幅<0%\s*\((\d+)个\)")
 
     limit_up_count = None
     consecutive_limit_count = None

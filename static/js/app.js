@@ -100,6 +100,9 @@ const I = {
   card_watchdog: "Watchdog", card_limit: "涨跌停",
   card_sentiment: "情绪判断", card_mainline: "主线板块",
   card_brief: "智能简报", card_invest_tip: "投资锦囊",
+  card_macro: "宏观风向标", card_bazi: "今日八字",
+  card_xgxz: "新股新债", card_advisor: "参谋信号",
+  card_risk: "黑天鹅/灰犀牛", card_decisions: "决策日志",
 
   // Misc
   lbl_hidden: "已隐藏：",
@@ -802,6 +805,7 @@ function render() {
         <div class="sc-field priv"><span class="sc-label">浮盈亏</span><span class="${pnl == null ? "flat" : cls(pnl)}">${privacyHidden ? MASK : (pnl == null ? "—" : `${pnl >= 0 ? "+" : ""}${fmtMoney(pnl)}`)}</span></div>
         <div class="sc-field priv"><span class="sc-label">浮盈亏%</span><span class="${pnlPct == null ? "flat" : cls(pnlPct)}">${privacyHidden ? MASK : (pnlPct == null ? "—" : `${pnlPct >= 0 ? "+" : ""}${fmtNum(pnlPct,2)}%`)}</span></div>
       </div>
+      <div class="stock-card-signals" id="sig-${s.ticker.replace('.','_')}"></div>
       <div class="stock-card-actions">
         ${s.suggest ? `<div class="stock-card-suggest">
           <span class="suggest-action suggest-${s.suggest.action}">${s.suggest.action}</span>
@@ -817,6 +821,8 @@ function render() {
 
   // Load sparklines asynchronously after card render
   loadSparklines(allRows.filter(r => !r.error));
+  // Load technical signals asynchronously
+  loadSignals(allRows.filter(r => !r.error));
 }
 
 // ── Sparkline rendering ───────────────────────────────────────────────────────
@@ -866,6 +872,51 @@ function renderSparkSVG(closes, changePct) {
 }
 
 // ── Sort (no-op: table headers removed, sorting still works internally) ──────
+
+// ── Technical signals loading ────────────────────────────────────────────────
+const _sigCache = {};
+function loadSignals(rows) {
+  rows.forEach(s => {
+    const el = document.getElementById(`sig-${s.ticker.replace('.','_')}`);
+    if (!el) return;
+
+    const cached = _sigCache[s.ticker];
+    if (cached && Date.now() - cached.ts < 300000) {
+      el.innerHTML = renderSignalBadges(cached.data);
+      return;
+    }
+
+    fetch(`/api/signals/${encodeURIComponent(s.ticker)}`)
+      .then(r => r.json())
+      .then(d => {
+        if (!d.ok) { el.innerHTML = ""; return; }
+        _sigCache[s.ticker] = { data: d, ts: Date.now() };
+        el.innerHTML = renderSignalBadges(d);
+      })
+      .catch(() => {});
+  });
+}
+
+function renderSignalBadges(d) {
+  if (!d.signals || !d.signals.length) return "";
+  const v = d.summary?.verdict;
+  const vCls = v === "买入" ? "sig-buy" : v === "卖出" ? "sig-sell" : "sig-hold";
+  const badges = d.signals.slice(0, 4).map(s => {
+    const c = s.action === "买" ? "sig-buy" : s.action === "卖" ? "sig-sell" : "sig-hold";
+    const dots = "●".repeat(s.strength);
+    return `<span class="sig-tag ${c}" title="${s.detail}">${s.name} ${dots}</span>`;
+  }).join("");
+  const indic = d.indicators || {};
+  const mini = [];
+  if (indic.rsi6 != null) mini.push(`RSI ${indic.rsi6}`);
+  if (indic.kdj?.k != null) mini.push(`K ${indic.kdj.k}`);
+  if (indic.macd?.hist != null) mini.push(`MACD ${indic.macd.hist > 0 ? "+" : ""}${indic.macd.hist}`);
+  return `<div class="sig-row">
+    <span class="sig-verdict ${vCls}">${v || "观望"}</span>
+    ${badges}
+  </div>
+  <div class="sig-mini">${mini.join(" | ")}</div>`;
+}
 
 // ── Add stock ─────────────────────────────────────────────────────────────────
 document.getElementById("btn-add").addEventListener("click", addStock);
@@ -973,8 +1024,35 @@ document.addEventListener("click", e => {
   if (!e.target.closest(".suggest-wrap")) suggBox.classList.remove("open");
 });
 
-// ── Refresh button ────────────────────────────────────────────────────────────
-document.getElementById("btn-refresh").addEventListener("click", loadStocks);
+// ── Refresh button (refreshes ALL cards, not just stocks) ─────────────────────
+let _refreshing = false;
+function refreshAllCards() {
+  if (_refreshing) return;          // re-entrance guard
+  _refreshing = true;
+  loadStocks()
+    .then(() => {
+      generateAutoBrief(false);
+      refreshMarketSentimentAuto();
+      loadSentimentChart();
+      refreshMainlineAuto();
+      refreshAiEdge(false);
+      refreshLimitStats();
+    })
+    .catch(() => {
+      // loadStocks failed — still refresh the insight cards independently
+      generateAutoBrief(false);
+      refreshMarketSentimentAuto();
+      loadSentimentChart();
+      refreshMainlineAuto();
+      refreshAiEdge(false);
+      refreshLimitStats();
+    })
+    .finally(() => { _refreshing = false; });
+  loadMacro();
+  loadBazi();
+  updateAutoRefreshStatus();
+}
+document.getElementById("btn-refresh").addEventListener("click", refreshAllCards);
 document.getElementById("btn-watchdog-guide").addEventListener("click", applyWatchdogStarterPreset);
 document.getElementById("btn-watchdog-check").addEventListener("click", runWatchdog);
 document.getElementById("inp-watchdog-change").addEventListener("change", getWatchdogConfig);
@@ -1100,6 +1178,10 @@ showRandomTip();
 
 // ── Macro indicators (宏观风向标) ─────────────────────────────────────────────
 
+const _macroSparkCache = {};
+let _macroDays = 20;
+let _lastMacroData = [];
+
 async function loadMacro() {
   const bar = document.getElementById("macro-bar");
   if (!bar) return;
@@ -1107,20 +1189,92 @@ async function loadMacro() {
     const res = await fetch("/api/macro");
     const data = await res.json();
     if (!data.length) { bar.innerHTML = '<span class="macro-loading">暂无数据</span>'; return; }
-    bar.innerHTML = data.map(d => {
-      const dir = d.change_pct > 0 ? "up" : d.change_pct < 0 ? "down" : "flat";
-      const arrow = d.change_pct > 0 ? "▲" : d.change_pct < 0 ? "▼" : "—";
-      const sign = d.change > 0 ? "+" : "";
-      return `<div class="macro-chip">
-        <span class="macro-name">${d.name}</span>
-        <span class="macro-price">${d.price}<span class="macro-unit">${d.unit || ""}</span></span>
-        <span class="macro-change ${dir}">${arrow} ${sign}${d.change} (${sign}${d.change_pct}%)</span>
-      </div>`;
-    }).join("");
+    _lastMacroData = data;
+    renderMacroChips(data);
+    loadMacroSparklines(data, _macroDays);
   } catch (_) {
     bar.innerHTML = '<span class="macro-loading">获取失败</span>';
   }
 }
+
+function renderMacroChips(data) {
+  const bar = document.getElementById("macro-bar");
+  if (!bar) return;
+  bar.innerHTML = data.map(d => {
+    const dir = d.change_pct > 0 ? "up" : d.change_pct < 0 ? "down" : "flat";
+    const arrow = d.change_pct > 0 ? "▲" : d.change_pct < 0 ? "▼" : "—";
+    const sign = d.change > 0 ? "+" : "";
+    const sparkId = `macro-spark-${d.symbol.replace(/[^a-zA-Z0-9]/g, "_")}`;
+    return `<div class="macro-chip">
+      <span class="macro-name">${d.name}</span>
+      <span class="macro-price">${d.price}<span class="macro-unit">${d.unit || ""}</span></span>
+      <span class="macro-change ${dir}">${arrow} ${sign}${d.change} (${sign}${d.change_pct}%)</span>
+      <span class="macro-spark" id="${sparkId}"></span>
+    </div>`;
+  }).join("");
+}
+
+function loadMacroSparklines(indicators, days) {
+  indicators.forEach(d => {
+    const sparkId = `macro-spark-${d.symbol.replace(/[^a-zA-Z0-9]/g, "_")}`;
+    const el = document.getElementById(sparkId);
+    if (!el) return;
+
+    const cacheKey = `${d.symbol}_${days}`;
+    const cached = _macroSparkCache[cacheKey];
+    if (cached && Date.now() - cached.ts < 3600000) {
+      el.innerHTML = renderMacroSparkSVG(cached.closes, d.change_pct);
+      return;
+    }
+
+    el.innerHTML = '<span style="color:var(--muted);font-size:.7rem">…</span>';
+    fetch(`/api/macro-history/${encodeURIComponent(d.symbol)}?days=${days}`)
+      .then(r => r.json())
+      .then(res => {
+        if (res.ok && res.closes && res.closes.length > 1) {
+          _macroSparkCache[cacheKey] = { closes: res.closes, ts: Date.now() };
+          el.innerHTML = renderMacroSparkSVG(res.closes, d.change_pct);
+        } else {
+          el.textContent = "";
+        }
+      })
+      .catch(() => { el.textContent = ""; });
+  });
+}
+
+function renderMacroSparkSVG(closes, changePct) {
+  const w = 120, h = 28, pad = 2;
+  const min = Math.min(...closes);
+  const max = Math.max(...closes);
+  const range = max - min || 1;
+  const points = closes.map((v, i) => {
+    const x = pad + (i / (closes.length - 1)) * (w - pad * 2);
+    const y = pad + (1 - (v - min) / range) * (h - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+
+  const color = (changePct || 0) >= 0 ? "var(--up)" : "var(--down)";
+  const lastX = (pad + (w - pad * 2)).toFixed(1);
+  const firstX = pad.toFixed(1);
+  const fillPoints = `${firstX},${h} ${points} ${lastX},${h}`;
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block;margin-top:4px">
+    <polygon points="${fillPoints}" fill="${color}" opacity="0.10"/>
+    <polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+// Period tab click handler
+document.getElementById("macro-period-tabs")?.addEventListener("click", e => {
+  const btn = e.target.closest(".macro-period-btn");
+  if (!btn) return;
+  document.querySelectorAll(".macro-period-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  _macroDays = parseInt(btn.dataset.days, 10);
+  if (_lastMacroData.length) {
+    loadMacroSparklines(_lastMacroData, _macroDays);
+  }
+});
+
 loadMacro();
 
 // ── Risk events (黑天鹅/灰犀牛) ───────────────────────────────────────────────
@@ -1140,16 +1294,25 @@ async function loadRiskEvents() {
       list.innerHTML = '<div class="risk-safe">✅ 当前无异常事件，市场平稳</div>';
       return;
     }
-    list.innerHTML = d.events.map(e => `
-      <div class="risk-event severity-${e.severity}">
+    const _dir = { bullish: "利好 ↑", bearish: "利空 ↓", ambiguous: "方向不明" };
+    list.innerHTML = d.events.map(e => {
+      const dirTag = e.direction ? `<span class="risk-dir dir-${e.direction}">${_dir[e.direction] || ""}</span>` : "";
+      const sectorTag = e.affected_sectors?.length ? `<div class="risk-sectors">📌 ${e.affected_sectors.join(" / ")}</div>` : "";
+      const srcLabel = e.auto_detected ? "🤖 自动" : (e.source === "manual" ? "✍️ 手动" : "");
+      const srcTag = srcLabel ? `<span class="risk-src">${srcLabel}</span>` : "";
+      const manualCls = e.auto_detected === false ? " manual-event" : (e.auto_detected ? " auto-event" : "");
+      return `
+      <div class="risk-event severity-${e.severity}${manualCls}">
         <span class="risk-badge type-${e.type}">${e.type}</span>
         <div class="risk-body">
-          <div class="risk-title">${e.title}</div>
+          <div class="risk-title">${e.title}${dirTag}${srcTag}</div>
           <div class="risk-detail">${e.detail}</div>
+          ${sectorTag}
         </div>
         <span class="risk-time">${e.time}</span>
       </div>
-    `).join("");
+    `;
+    }).join("");
   } catch (_) {
     list.innerHTML = '<div class="risk-empty">获取失败</div>';
   }
@@ -1157,6 +1320,103 @@ async function loadRiskEvents() {
 document.getElementById("btn-risk-refresh")?.addEventListener("click", loadRiskEvents);
 document.getElementById("sel-risk-period")?.addEventListener("change", loadRiskEvents);
 loadRiskEvents();
+
+// Manual risk event input
+document.getElementById("btn-risk-add")?.addEventListener("click", async () => {
+  const msg = document.getElementById("risk-add-msg");
+  const title = document.getElementById("risk-inp-title")?.value?.trim();
+  if (!title) { if (msg) msg.textContent = "请输入标题"; return; }
+  const payload = {
+    title,
+    type: document.getElementById("risk-inp-type")?.value || "灰犀牛",
+    severity: document.getElementById("risk-inp-severity")?.value || "medium",
+    direction: document.getElementById("risk-inp-direction")?.value || "ambiguous",
+    source: document.getElementById("risk-inp-source")?.value || "geopolitical",
+    duration: document.getElementById("risk-inp-duration")?.value || "short",
+    detail: document.getElementById("risk-inp-detail")?.value?.trim() || "",
+    affected_sectors: document.getElementById("risk-inp-sectors")?.value?.trim() || "",
+  };
+  try {
+    const res = await fetch("/api/risk-events", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const d = await res.json();
+    if (!d.ok) { if (msg) msg.textContent = d.msg || "录入失败"; return; }
+    if (msg) msg.textContent = "✅ 已录入";
+    document.getElementById("risk-inp-title").value = "";
+    document.getElementById("risk-inp-detail").value = "";
+    document.getElementById("risk-inp-sectors").value = "";
+    loadRiskEvents();
+    setTimeout(() => { if (msg) msg.textContent = ""; }, 2000);
+  } catch (_) {
+    if (msg) msg.textContent = "请求失败";
+  }
+});
+
+// ── Stock Screener (选股雷达) ────────────────────────────────────────────────
+
+(async function initScreener() {
+  const sel = document.getElementById("sel-screener-strategy");
+  if (!sel) return;
+  try {
+    const res = await fetch("/api/screener/strategies");
+    const d = await res.json();
+    if (d.ok && d.strategies) {
+      sel.innerHTML = d.strategies.map(s =>
+        `<option value="${s.key}">${s.icon} ${s.name} — ${s.desc}</option>`
+      ).join("");
+    }
+  } catch (_) {
+    sel.innerHTML = '<option value="golden_cross">✦ 均线金叉</option>';
+  }
+})();
+
+async function loadScreener() {
+  const sel = document.getElementById("sel-screener-strategy");
+  const box = document.getElementById("screener-results");
+  const status = document.getElementById("screener-status");
+  if (!sel || !box) return;
+  const strategy = sel.value;
+  if (status) status.textContent = "扫描中…";
+  box.innerHTML = '<div class="screener-empty">正在扫描，沪深300需要约10~30秒…</div>';
+
+  try {
+    const res = await fetch("/api/screener?strategy=" + encodeURIComponent(strategy));
+    const d = await res.json();
+    if (!d.ok) {
+      box.innerHTML = `<div class="screener-empty">⚠️ ${d.msg || "扫描失败"}</div>`;
+      if (status) status.textContent = "";
+      return;
+    }
+    if (status) status.textContent = `${d.scanned} · ${d.hits.length}只命中 · ${d.ts}`;
+    if (!d.hits.length) {
+      box.innerHTML = '<div class="screener-empty">未找到符合条件的股票</div>';
+      return;
+    }
+    let html = '<table class="screener-table"><thead><tr>'
+      + '<th>代码</th><th>名称</th><th>现价</th><th>涨跌%</th><th>分数</th><th>命中原因</th>'
+      + '</tr></thead><tbody>';
+    d.hits.forEach(h => {
+      const cls = h.change_pct > 0 ? "up" : h.change_pct < 0 ? "down" : "";
+      const pctStr = (h.change_pct > 0 ? "+" : "") + h.change_pct.toFixed(2) + "%";
+      const scoreBar = `<span class="screener-score" style="--sw:${h.score}%">${h.score}</span>`;
+      const reasons = h.reasons.map(r => `<span class="screener-reason">${r}</span>`).join(" ");
+      html += `<tr>
+        <td class="mono">${h.code}</td>
+        <td>${h.name}</td>
+        <td class="mono right">${h.price.toFixed(2)}</td>
+        <td class="mono right ${cls}">${pctStr}</td>
+        <td>${scoreBar}</td>
+        <td class="screener-reasons">${reasons}</td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    box.innerHTML = html;
+  } catch (_) {
+    box.innerHTML = '<div class="screener-empty">网络错误</div>';
+    if (status) status.textContent = "";
+  }
+}
+
+document.getElementById("btn-screener-run")?.addEventListener("click", loadScreener);
 
 // ── Provider test panel ───────────────────────────────────────────────────────
 
@@ -1451,52 +1711,33 @@ function renderSentimentChart(container, history) {
   const maxS = Math.max(...scores, 3);
   const range = maxS - minS || 1;
 
-  const stageColors = { [I.stage_rising]: "var(--up)", [I.stage_ebbing]: "var(--down)", [I.stage_divergence]: "var(--muted)" };
+  const n = history.length;
+  const barGap = 1;
+  const barW = Math.max(2, (plotW / n) - barGap);
 
-  // Build points
-  const pts = history.map((e, i) => {
-    const x = padL + (i / Math.max(history.length - 1, 1)) * plotW;
-    const y = padT + (1 - (e.score - minS) / range) * plotH;
-    return { x, y, ...e };
-  });
-
-  const polyline = pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-
-  // Stage background bands
-  let bands = "";
-  let bandStart = 0;
-  let bandStage = pts[0]?.stage;
-  for (let i = 1; i <= pts.length; i++) {
-    const cur = i < pts.length ? pts[i].stage : null;
-    if (cur !== bandStage || i === pts.length) {
-      const x1 = pts[bandStart].x;
-      const x2 = pts[Math.min(i, pts.length - 1)].x;
-      const color = stageColors[bandStage] || "var(--muted)";
-      bands += `<rect x="${x1}" y="${padT}" width="${Math.max(x2 - x1, 2)}" height="${plotH}" fill="${color}" opacity="0.07"/>`;
-      bandStart = i;
-      bandStage = cur;
-    }
-  }
-
-  // Zero line
+  // Zero line Y
   const zeroY = padT + (1 - (0 - minS) / range) * plotH;
+
+  // Build bars: red for positive score (up), green for negative (down) — A-share style
+  const bars = history.map((e, i) => {
+    const x = padL + i * (barW + barGap);
+    const scoreY = padT + (1 - (e.score - minS) / range) * plotH;
+    const barTop = Math.min(scoreY, zeroY);
+    const barH = Math.max(Math.abs(scoreY - zeroY), 1);
+    const color = e.score > 0 ? "var(--up)" : e.score < 0 ? "var(--down)" : "var(--muted)";
+    return `<rect x="${x.toFixed(1)}" y="${barTop.toFixed(1)}" width="${barW.toFixed(1)}" height="${barH.toFixed(1)}" fill="${color}" opacity="0.85" rx="1">
+      <title>${(e.ts||"").slice(0,16)} ${I.lbl_score}:${e.score} ${e.stage}</title>
+    </rect>`;
+  }).join("");
 
   // X-axis date labels (show a few)
   let xLabels = "";
-  const step = Math.max(1, Math.floor(history.length / 5));
-  for (let i = 0; i < history.length; i += step) {
-    const p = pts[i];
-    const label = (p.ts || "").slice(5, 10); // "MM-DD"
-    xLabels += `<text x="${p.x}" y="${h - 2}" text-anchor="middle" fill="var(--muted)" font-size="9">${label}</text>`;
+  const step = Math.max(1, Math.floor(n / 5));
+  for (let i = 0; i < n; i += step) {
+    const x = padL + i * (barW + barGap) + barW / 2;
+    const label = (history[i].ts || "").slice(5, 10); // "MM-DD"
+    xLabels += `<text x="${x}" y="${h - 2}" text-anchor="middle" fill="var(--muted)" font-size="9">${label}</text>`;
   }
-
-  // Dots with stage color
-  const dots = pts.map(p => {
-    const c = stageColors[p.stage] || "var(--muted)";
-    return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3" fill="${c}" stroke="var(--bg)" stroke-width="1">
-      <title>${(p.ts||"").slice(0,16)} ${I.lbl_score}:${p.score} ${p.stage}</title>
-    </circle>`;
-  }).join("");
 
   // Y-axis labels
   const yLabels = [maxS, 0, minS].map(v => {
@@ -1505,10 +1746,8 @@ function renderSentimentChart(container, history) {
   }).join("");
 
   container.innerHTML = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block">
-    ${bands}
     <line x1="${padL}" y1="${zeroY}" x2="${w - padR}" y2="${zeroY}" stroke="var(--border)" stroke-dasharray="3,3" stroke-width="0.5"/>
-    <polyline points="${polyline}" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>
-    ${dots}
+    ${bars}
     ${yLabels}
     ${xLabels}
   </svg>`;
@@ -1693,6 +1932,31 @@ setInterval(() => runAutoTask(() => refreshAiEdge(false)), 1_800_000);
 setInterval(() => runAutoTask(refreshLimitStats), 300_000);  // every 5min
 setInterval(updateAutoRefreshStatus, 60_000);
 
+// ── Midnight daily refresh (00:00 Beijing time) ──────────────────────────────
+(function initMidnightRefresh() {
+  let _lastBjDate = "";
+
+  function getBjDateStr() {
+    const bj = new Date(Date.now() + (8 * 3600_000 + new Date().getTimezoneOffset() * 60_000));
+    return bj.toISOString().slice(0, 10);
+  }
+
+  _lastBjDate = getBjDateStr();
+
+  // Check every 30 seconds if Beijing date has rolled over
+  setInterval(() => {
+    const today = getBjDateStr();
+    if (today !== _lastBjDate) {
+      _lastBjDate = today;
+      console.log("[midnight] Beijing date changed to", today, "— refreshing all cards");
+      // Always refresh bazi + xgxz (date-dependent); other cards respect quiet hours
+      loadBazi();
+      loadXinguXinzhai();
+      runAutoTask(refreshAllCards);
+    }
+  }, 30_000);
+})();
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 loadPositions();
 
@@ -1828,7 +2092,9 @@ loadWatchdogConfig();
   const CARD_NAMES = {
     stats: I.card_stats, "ai-edge": I.card_ai_edge, watchdog: I.card_watchdog,
     "limit-stats": I.card_limit, sentiment: I.card_sentiment,
-    mainline: I.card_mainline, brief: I.card_brief, "invest-tip": I.card_invest_tip
+    mainline: I.card_mainline, brief: I.card_brief, "invest-tip": I.card_invest_tip,
+    macro: I.card_macro, bazi: I.card_bazi, xgxz: I.card_xgxz,
+    advisor: I.card_advisor, "risk-events": I.card_risk, decisions: I.card_decisions
   };
   const wrap = document.getElementById("insight-wrap");
   const bar = document.getElementById("restore-bar");
@@ -2002,12 +2268,357 @@ applyColorMode(localStorage.getItem("color_mode") || "cn");
 applyPrivacyMode();
 updateAutoRefreshStatus();
 
-// Load watchlist stocks first, then kick off heavier market-wide endpoints
-loadStocks().then(() => {
-  generateAutoBrief(false);
-  refreshMarketSentimentAuto();
-  loadSentimentChart();
-  refreshMainlineAuto();
-  refreshAiEdge(false);
-  refreshLimitStats();
-});
+// ── Decision Journal (决策日志) ──────────────────────────────────────────────
+(function initDecisionJournal() {
+  const TYPE_LABEL = { trade: "交易", life: "生活", work: "工作" };
+  const STATE_LABEL = { idea: "💡 想法", decided: "✅ 已决", acted: "🚀 已执行", reviewed: "📝 已复盘" };
+  const STATES = ["idea", "decided", "acted", "reviewed"];
+
+  let allDecisions = [];
+  let currentView = "kanban";
+
+  // ── API helpers ──
+  async function apiGet(url) { const r = await fetch(url); return r.json(); }
+  async function apiPost(url, body) {
+    return (await fetch(url, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) })).json();
+  }
+  async function apiPut(url, body) {
+    return (await fetch(url, { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) })).json();
+  }
+  async function apiDel(url) { return (await fetch(url, { method: "DELETE" })).json(); }
+
+  // ── Load & render ──
+  async function loadDecisions() {
+    const typeFilter = document.getElementById("dec-filter-type")?.value || "";
+    const params = new URLSearchParams();
+    if (typeFilter) params.set("type", typeFilter);
+    const url = "/api/decisions" + (params.toString() ? "?" + params : "");
+    const d = await apiGet(url);
+    if (d.ok) allDecisions = d.decisions;
+    render();
+  }
+
+  function render() {
+    const total = document.getElementById("dec-total");
+    if (total) total.textContent = `共 ${allDecisions.length} 条`;
+    if (currentView === "kanban") renderKanban();
+    else renderList();
+  }
+
+  function makeCardHTML(d) {
+    const tags = (d.tags || []).map(t => `<span class="dec-tag">${esc(t)}</span>`).join("");
+    const time = d.created_at ? d.created_at.slice(5, 16) : "";
+    return `<div class="dec-card" draggable="true" data-id="${d.id}">
+      <div class="dec-card-title">${esc(d.title)}</div>
+      <div class="dec-card-meta">
+        <span class="dec-type-badge" data-type="${d.type}">${TYPE_LABEL[d.type] || d.type}</span>
+        ${tags}
+      </div>
+      ${d.context ? `<div class="dec-card-time" title="环境">${esc(d.context.slice(0, 60))}</div>` : ""}
+      <div class="dec-card-time">${time}</div>
+      <div class="dec-card-actions">
+        ${STATES.filter(s => s !== d.state).map(s =>
+          `<button data-id="${d.id}" data-to="${s}" class="dec-move-btn">${STATE_LABEL[s]}</button>`
+        ).join("")}
+        <button data-id="${d.id}" class="dec-del-btn" title="删除">🗑</button>
+      </div>
+    </div>`;
+  }
+
+  function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+  function renderKanban() {
+    document.getElementById("dec-kanban").style.display = "";
+    document.getElementById("dec-list-view").style.display = "none";
+    STATES.forEach(state => {
+      const col = document.querySelector(`.dec-col-body[data-state="${state}"]`);
+      if (!col) return;
+      const items = allDecisions.filter(d => d.state === state);
+      col.innerHTML = items.map(makeCardHTML).join("") || `<div style="color:var(--muted);font-size:.75rem;text-align:center;padding:12px 0">空</div>`;
+    });
+    bindCardEvents();
+    bindKanbanDrag();
+  }
+
+  function renderList() {
+    document.getElementById("dec-kanban").style.display = "none";
+    const lv = document.getElementById("dec-list-view");
+    lv.style.display = "";
+    const sorted = [...allDecisions].sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+    lv.innerHTML = sorted.map(d => {
+      const tags = (d.tags || []).map(t => `<span class="dec-tag">${esc(t)}</span>`).join(" ");
+      return `<div class="dec-list-item">
+        <span class="dec-type-badge" data-type="${d.type}">${TYPE_LABEL[d.type]}</span>
+        <span>${esc(d.title)} ${tags}</span>
+        <span style="color:var(--muted);font-size:.75rem">${(d.created_at || "").slice(5, 16)}</span>
+        <span style="font-size:.75rem">${STATE_LABEL[d.state] || d.state}</span>
+      </div>`;
+    }).join("") || `<div style="color:var(--muted);text-align:center;padding:16px">暂无决策</div>`;
+  }
+
+  // ── Card interaction events ──
+  function bindCardEvents() {
+    document.querySelectorAll(".dec-move-btn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        await apiPut(`/api/decisions/${btn.dataset.id}`, { state: btn.dataset.to });
+        loadDecisions();
+      });
+    });
+    document.querySelectorAll(".dec-del-btn").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("确定删除此决策？")) return;
+        await apiDel(`/api/decisions/${btn.dataset.id}`);
+        loadDecisions();
+      });
+    });
+  }
+
+  // ── Kanban drag-and-drop (move between columns) ──
+  function bindKanbanDrag() {
+    let dragCard = null;
+    document.querySelectorAll(".dec-card[draggable]").forEach(card => {
+      card.addEventListener("dragstart", e => {
+        dragCard = card;
+        card.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", card.dataset.id);
+      });
+      card.addEventListener("dragend", () => {
+        card.classList.remove("dragging");
+        document.querySelectorAll(".dec-col-body").forEach(c => c.classList.remove("drag-over"));
+        dragCard = null;
+      });
+    });
+    document.querySelectorAll(".dec-col-body").forEach(col => {
+      col.addEventListener("dragover", e => { e.preventDefault(); col.classList.add("drag-over"); });
+      col.addEventListener("dragleave", () => col.classList.remove("drag-over"));
+      col.addEventListener("drop", async e => {
+        e.preventDefault();
+        col.classList.remove("drag-over");
+        if (!dragCard) return;
+        const newState = col.dataset.state;
+        const id = dragCard.dataset.id;
+        await apiPut(`/api/decisions/${id}`, { state: newState });
+        loadDecisions();
+      });
+    });
+  }
+
+  // ── Create decision ──
+  document.getElementById("btn-dec-save")?.addEventListener("click", async () => {
+    const title = document.getElementById("dec-title")?.value?.trim();
+    if (!title) { document.getElementById("dec-msg").textContent = "请输入标题"; return; }
+    const body = {
+      title,
+      type: document.getElementById("dec-type")?.value || "trade",
+      state: document.getElementById("dec-state")?.value || "idea",
+      context: document.getElementById("dec-context")?.value || "",
+      action: document.getElementById("dec-action")?.value || "",
+      outcome: document.getElementById("dec-outcome")?.value || "",
+      tags: (document.getElementById("dec-tags")?.value || "").split(",").map(s => s.trim()).filter(Boolean),
+    };
+    const r = await apiPost("/api/decisions", body);
+    if (r.ok) {
+      document.getElementById("dec-msg").textContent = "✓ 已保存";
+      // Reset form
+      ["dec-title", "dec-context", "dec-action", "dec-outcome", "dec-tags"].forEach(id => {
+        const el = document.getElementById(id); if (el) el.value = "";
+      });
+      document.getElementById("decision-form-wrap").removeAttribute("open");
+      loadDecisions();
+      setTimeout(() => { document.getElementById("dec-msg").textContent = ""; }, 2000);
+    } else {
+      document.getElementById("dec-msg").textContent = "✗ " + (r.error || "保存失败");
+    }
+  });
+
+  // ── View toggle ──
+  document.querySelectorAll(".dec-view-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      currentView = btn.dataset.view;
+      document.querySelectorAll(".dec-view-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      render();
+    });
+  });
+
+  // ── Filter ──
+  document.getElementById("dec-filter-type")?.addEventListener("change", () => loadDecisions());
+
+  // ── Boot ──
+  loadDecisions();
+})();
+
+// ── 新股新债 (IPO & bond subscription, refreshes at midnight only) ───────────
+async function loadXinguXinzhai() {
+  const body = document.getElementById("xgxz-body");
+  if (!body) return;
+  body.innerHTML = '<span class="macro-loading">加载中…</span>';
+  try {
+    const res = await fetch("/api/xingu-xinzhai");
+    const d = await res.json();
+    if (!d.ok) { body.innerHTML = '<span class="macro-loading">获取失败</span>'; return; }
+    const today = d.date;  // "YYYY-MM-DD"
+    function dateCls(dt) {
+      if (!dt) return "";
+      if (dt === today) return "xgxz-today";
+      return dt > today ? "xgxz-future" : "xgxz-past";
+    }
+    function fmtRate(r) {
+      if (r == null) return "—";
+      return (r * 100).toFixed(4) + "%";
+    }
+    function fmtMult(m) {
+      if (m == null) return "—";
+      return m.toFixed(0) + "倍";
+    }
+    let html = '';
+    // 新股
+    html += '<div class="xgxz-section-title">📈 新股申购</div>';
+    if (d.ipo.length) {
+      html += '<table class="xgxz-table"><tr><th>代码</th><th>名称</th><th>申购日</th><th>发行价</th><th>中签率</th><th>超额倍数</th></tr>';
+      d.ipo.forEach(s => {
+        const cls = dateCls(s.apply_date);
+        html += `<tr class="${cls}"><td>${s.code}</td><td>${s.name}</td><td>${s.apply_date || "—"}</td><td>${s.price != null ? s.price.toFixed(2) : "—"}</td><td>${fmtRate(s.win_rate)}</td><td>${fmtMult(s.multiple)}</td></tr>`;
+      });
+      html += '</table>';
+    } else {
+      html += '<div class="xgxz-empty">暂无新股数据</div>';
+    }
+    // 新债
+    html += '<div class="xgxz-section-title">📊 新债申购</div>';
+    if (d.bond.length) {
+      html += '<table class="xgxz-table"><tr><th>代码</th><th>名称</th><th>申购日</th><th>上市日</th><th>中签率</th></tr>';
+      d.bond.forEach(b => {
+        const cls = dateCls(b.apply_date);
+        html += `<tr class="${cls}"><td>${b.code}</td><td>${b.apply_name || b.name}</td><td>${b.apply_date || "—"}</td><td>${b.list_date || "—"}</td><td>${fmtRate(b.win_rate)}</td></tr>`;
+      });
+      html += '</table>';
+    } else {
+      html += '<div class="xgxz-empty">暂无新债数据</div>';
+    }
+    body.innerHTML = html;
+    // Reset scroll and update fade hint after content loaded
+    body.scrollLeft = 0;
+    body.classList.remove("scrolled-end");
+  } catch (_) {
+    body.innerHTML = '<span class="macro-loading">获取失败</span>';
+  }
+}
+loadXinguXinzhai();  // boot once
+
+// ── Advisor Card ─────────────────────────────────────────────────────────────
+(function() {
+  const btn = document.getElementById("btn-advisor-run");
+  const body = document.getElementById("advisor-body");
+  const status = document.getElementById("advisor-status");
+  const selRisk = document.getElementById("advisor-risk-pref");
+
+  async function loadAdvisor() {
+    // Build positions array from localStorage
+    const posMap = JSON.parse(localStorage.getItem("positions_v1") || "{}");
+    const posArr = Object.entries(posMap)
+      .filter(([, v]) => v && v.shares > 0 && v.cost > 0)
+      .map(([ticker, v]) => ({ ticker, shares: v.shares, cost: v.cost }));
+
+    if (posArr.length === 0) {
+      body.innerHTML = '<div class="advisor-no-positions">暂无持仓数据。请先在股票卡片中设置持仓和成本。</div>';
+      return;
+    }
+
+    const riskPref = selRisk.value;
+    status.textContent = "评估中…";
+    btn.disabled = true;
+
+    try {
+      const url = `/api/advisor?risk_pref=${encodeURIComponent(riskPref)}&positions=${encodeURIComponent(JSON.stringify(posArr))}`;
+      const resp = await fetch(url);
+      const data = await resp.json();
+
+      if (!data.ok) {
+        body.innerHTML = `<div class="advisor-empty">${data.msg || "评估失败"}</div>`;
+        status.textContent = "";
+        return;
+      }
+
+      let html = '';
+
+      // Portfolio-level action
+      const pa = data.portfolio_action || "observe";
+      const paLabel = { reduce: "⚠️ 建议减仓", add: "✅ 可加仓", observe: "👀 观望" };
+      html += `<div class="advisor-portfolio">`;
+      html += `<div class="advisor-portfolio-action ${pa}">${paLabel[pa] || pa}</div>`;
+      html += `<div>${data.portfolio_reason || ""}</div>`;
+      const ctx = data.context || {};
+      html += `<div class="advisor-ctx">市场: ${ctx.regime || "—"} | 情绪: ${ctx.sentiment_stage || "—"} | 信心: ${ctx.confidence ?? "—"}%</div>`;
+      html += `</div>`;
+
+      // Per-stock signals
+      if (data.signals && data.signals.length > 0) {
+        html += '<div class="advisor-signals">';
+        for (const sig of data.signals) {
+          const ac = sig.action || "hold";
+          const bars = "█".repeat(sig.strength || 1) + "░".repeat(5 - (sig.strength || 1));
+          html += `<div class="advisor-signal">`;
+          html += `<div class="advisor-signal-head">`;
+          html += `<span class="advisor-signal-name">${sig.name || sig.ticker}</span>`;
+          html += `<span class="advisor-signal-action ${ac}">${ac.toUpperCase()}</span>`;
+          html += `<span class="advisor-signal-strength">${bars}</span>`;
+          html += `</div>`;
+          if (sig.reasons && sig.reasons.length) {
+            html += `<div class="advisor-signal-reasons">${sig.reasons.join("；")}</div>`;
+          }
+          if (sig.stop_loss || sig.take_profit) {
+            const parts = [];
+            if (sig.stop_loss) parts.push(`止损 ¥${sig.stop_loss.toFixed(2)}`);
+            if (sig.take_profit) parts.push(`止盈 ¥${sig.take_profit.toFixed(2)}`);
+            html += `<div class="advisor-signal-prices">${parts.join(" | ")}</div>`;
+          }
+          html += `</div>`;
+        }
+        html += '</div>';
+      }
+
+      body.innerHTML = html;
+      status.textContent = data.generated_at ? `更新: ${data.generated_at.slice(11, 16)}` : "";
+    } catch (e) {
+      body.innerHTML = '<div class="advisor-empty">请求失败，请稍后重试</div>';
+      status.textContent = "";
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  btn.addEventListener("click", loadAdvisor);
+})();
+
+// ── Horizontal scroll-hint management ────────────────────────────────────────
+(function initScrollHints() {
+  function updateHint(el) {
+    const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 2;
+    el.classList.toggle("scrolled-end", atEnd);
+  }
+  // Monitor all .scroll-hint elements
+  function bind(el) {
+    el.addEventListener("scroll", () => updateHint(el), { passive: true });
+    updateHint(el);
+  }
+  // Bind existing + watch for new ones via MutationObserver
+  document.querySelectorAll(".scroll-hint").forEach(bind);
+  new MutationObserver(muts => {
+    muts.forEach(m => m.addedNodes.forEach(n => {
+      if (n.nodeType === 1) {
+        if (n.classList?.contains("scroll-hint")) bind(n);
+        n.querySelectorAll?.(".scroll-hint").forEach(bind);
+      }
+    }));
+  }).observe(document.body, { childList: true, subtree: true });
+
+  // Re-check after content loads (tables render async)
+  window.addEventListener("load", () => {
+    document.querySelectorAll(".scroll-hint").forEach(updateHint);
+  });
+})();
+
+// ── Boot: load all cards ─────────────────────────────────────────────────────
+refreshAllCards();

@@ -25,6 +25,7 @@ watchlist_cn copy.json
 data/*.csv
 data/sentiment_last_known.json
 data/sentiment_history.json
+data/decisions.json
 
 # OS
 .DS_Store

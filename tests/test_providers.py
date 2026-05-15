@@ -11,7 +11,7 @@ SRC_DIR = pathlib.Path(__file__).resolve().parent.parent / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from providers import (
+from data.providers import (
     is_a_share_ticker,
     _ticker_to_a_share_code,
     _ticker_to_sina_symbol,

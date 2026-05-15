@@ -12,6 +12,12 @@ Usage:
 import sys
 import pathlib
 import datetime
+
+# Allow running as standalone script: python src/analysis/summary.py
+_SRC_DIR = str(pathlib.Path(__file__).resolve().parent.parent)
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
+
 import pandas as pd
 from time_utils import BeijingTime
 

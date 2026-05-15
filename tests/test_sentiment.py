@@ -16,7 +16,7 @@ if str(SRC_DIR) not in sys.path:
 
 # Must import config first to set up defaults
 import config  # noqa: F401
-from sentiment import (
+from analysis.sentiment import (
     evaluate_market_sentiment,
     merge_with_last_known,
     append_sentiment_history,
@@ -114,8 +114,8 @@ class TestAppendSentimentHistory:
         hist_file = tmp_path / "history.json"
         hist_file.write_text("[]", encoding="utf-8")
 
-        with patch("sentiment._SENTIMENT_HISTORY_FILE", hist_file), \
-             patch("sentiment.BeijingTime") as mock_bt:
+        with patch("analysis.sentiment._SENTIMENT_HISTORY_FILE", hist_file), \
+             patch("analysis.sentiment.BeijingTime") as mock_bt:
             mock_bt.datetime_str.return_value = "2026-05-08 14:30:00"
 
             result = {"metrics": {"score": 2}, "stage": "上升"}
