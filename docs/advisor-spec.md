@@ -94,3 +94,29 @@ Multiple rules → highest strength wins, reasons merged.
 23. Majority sell → portfolio "减仓"
 24. Invalid risk_pref → defaults to balanced
 25. Price suggestions (stop_loss/take_profit values)
+
+---
+
+## V2 YAMLStrategy (v3.2+)
+
+策略可从 YAML 声明式配置加载，与 RuleBasedStrategy 实现同一 Strategy Protocol。
+
+> 设计决策、YAML 结构示例、评估器注册表详见 [ADR-008](ADR.md#adr-008-autodev--yaml-策略声明--自动决策循环)。
+
+### 与 RuleBasedStrategy 的关系
+
+| 维度 | RuleBasedStrategy | YAMLStrategy |
+|------|-------------------|--------------|
+| 配置 | 硬编码在 advisor.py | `data/strategies/*.yaml` |
+| 热加载 | ✗ | ✓ |
+| 因子权重 | 固定 | 可调 |
+| Protocol | Strategy | Strategy |
+
+两者可互换注入 `evaluate_portfolio()`。
+
+### AutoDev 集成
+
+`YAMLStrategy` 是 AutoDev 循环的决策核心：
+```
+AutoDev.decide() → strategy.evaluate(pos, ctx, risk_pref) → Signal
+```

@@ -567,6 +567,123 @@ Pattern types: `low_confidence`, `no_stop_loss`, `no_review`, `ai_ratio`, `overt
 
 ---
 
+## AutoDev (自动决策循环)
+
+### GET /api/strategies
+List all available YAML strategy configurations.
+
+**Response** `200`:
+```json
+{
+  "ok": true,
+  "strategies": [
+    {
+      "name": "rule_v1",
+      "version": 1,
+      "description": "基础规则引擎 — 5因子加权打分",
+      "file": "rule_v1.yaml",
+      "factors": 5
+    },
+    {
+      "name": "conservative_v1",
+      "version": 1,
+      "description": "保守策略 — 重风控轻进攻",
+      "file": "conservative.yaml",
+      "factors": 5
+    }
+  ]
+}
+```
+
+---
+
+### POST /api/autodev/cycle
+Execute one full AutoDev loop: observe → decide → act → evaluate → learn.
+
+**Body**:
+```json
+{
+  "strategy": "rule_v1",
+  "risk_pref": "balanced",
+  "positions": [
+    {"ticker": "600519.SH", "name": "贵州茅台", "shares": 100, "cost": 1800, "price": 1600, "change_pct": -2.0, "high52": 2000, "low52": 1500, "volume": 50000}
+  ],
+  "context": {
+    "regime": "偏强",
+    "sentiment_stage": "上升",
+    "sentiment_score": 3,
+    "tradable": true,
+    "confidence": 80,
+    "risk_events": []
+  },
+  "current_prices": {"贵州茅台": 1650}
+}
+```
+
+- `strategy` (default: "rule_v1") — strategy name matching `data/strategies/{name}.yaml`
+- `risk_pref` (default: "balanced") — "conservative" | "balanced" | "aggressive"
+- `positions` — array of position objects
+- `context` — market context (regime, sentiment, risk events)
+- `current_prices` (optional) — `{symbol: price}` for evaluating past decisions
+
+**Response** `200`:
+```json
+{
+  "ok": true,
+  "cycle": {
+    "observed_at": "2026-05-15 14:30:00",
+    "strategy": "rule_v1",
+    "version": 1,
+    "risk_pref": "balanced",
+    "signals_count": 1,
+    "acted_count": 0,
+    "evaluations_count": 0,
+    "patterns_count": 2,
+    "suggestions_count": 1
+  },
+  "signals": [{
+    "ticker": "600519.SH",
+    "name": "贵州茅台",
+    "action": "hold",
+    "strength": 1,
+    "reasons": ["无明显信号，建议持有观望"],
+    "factors": [
+      {"name": "盈亏", "score": -1, "weight": 0.30, "detail": "浮亏 -11.1%"},
+      {"name": "风险", "score": 0, "weight": 0.25, "detail": "无风险事件"}
+    ]
+  }],
+  "decisions": [],
+  "evaluations": [],
+  "analysis": {
+    "ok": true,
+    "total": 5,
+    "patterns": [{"type": "no_stop_loss", "label": "...", "severity": "danger", "count": 3}],
+    "suggestions": [{"type": "weight_adjust", "factor": "风险", "direction": "increase", "reason": "3 笔决策未设止损"}]
+  }
+}
+```
+
+Decisions created by `act()` have `source="rule"`, `tags=["autodev", strategy_name]`.
+
+**Error** `404`: `{"ok": false, "error": "Strategy 'xxx' not found"}`
+
+---
+
+### GET /api/autodev/status
+Return available strategies and current AutoDev state.
+
+**Response** `200`:
+```json
+{
+  "ok": true,
+  "strategies": [
+    {"name": "rule_v1", "version": 1, "description": "基础规则引擎 — 5因子加权打分", "file": "rule_v1.yaml", "factors": 5}
+  ]
+}
+```
+
+---
+
 ## Bazi (八字)
 
 ### GET /api/bazi

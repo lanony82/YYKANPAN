@@ -32,6 +32,8 @@ from data.providers import (
     _fetch_52w,
 )
 from trading import decision as dec
+from trading import strategy_loader as strat
+from trading.autodev import AutoDev
 from analysis import advisor as adv
 from analysis import quant
 from analysis import screener
@@ -2548,6 +2550,63 @@ def analyze_decisions():
     """Analyze trade decisions for behavioral patterns."""
     dtype = request.args.get("type", "trade")
     return jsonify(dec.analyze(dtype=dtype))
+
+
+# ── AutoDev endpoints ─────────────────────────────────────────────────────────
+
+@app.route("/api/strategies", methods=["GET"])
+def api_list_strategies():
+    """List all available YAML strategies."""
+    return jsonify({"ok": True, "strategies": strat.list_strategies()})
+
+
+@app.route("/api/autodev/cycle", methods=["POST"])
+def api_autodev_cycle():
+    """Run one AutoDev cycle: observe → decide → act → evaluate → learn."""
+    data = request.get_json(silent=True) or {}
+    strategy_name = data.get("strategy", "rule_v1")
+    risk_pref = data.get("risk_pref", "balanced")
+
+    try:
+        dev = AutoDev(strategy_name=strategy_name, risk_pref=risk_pref)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "error": f"Strategy '{strategy_name}' not found"}), 404
+
+    # Build positions from current portfolio data
+    positions = []
+    ctx_data = data.get("context") or {}
+    context = adv.MarketContext(
+        regime=ctx_data.get("regime", "震荡"),
+        sentiment_stage=ctx_data.get("sentiment_stage", "分歧"),
+        sentiment_score=ctx_data.get("sentiment_score", 0),
+        tradable=ctx_data.get("tradable", True),
+        confidence=ctx_data.get("confidence", 50.0),
+        risk_events=ctx_data.get("risk_events", []),
+    )
+
+    for p in data.get("positions", []):
+        positions.append(adv.PositionInput(
+            ticker=p.get("ticker", ""),
+            name=p.get("name", ""),
+            shares=p.get("shares", 0),
+            cost=p.get("cost", 0.0),
+            price=p.get("price", 0.0),
+            change_pct=p.get("change_pct", 0.0),
+            high52=p.get("high52"),
+            low52=p.get("low52"),
+            volume=p.get("volume", 0),
+        ))
+
+    current_prices = data.get("current_prices") or {}
+    result = dev.run_cycle(positions, context, current_prices)
+    return jsonify(result)
+
+
+@app.route("/api/autodev/status", methods=["GET"])
+def api_autodev_status():
+    """Return available strategies and factor weights."""
+    strategies = strat.list_strategies()
+    return jsonify({"ok": True, "strategies": strategies})
 
 
 # ── Serve frontend ────────────────────────────────────────────────────────────

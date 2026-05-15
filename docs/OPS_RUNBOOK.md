@@ -62,6 +62,7 @@ docker logs -f yykanpan
 | `data/sentiment_config.json` | 情绪阈值配置 | 建议备份 |
 | `data/sentiment_last_known.json` | 最近已知情绪数据 | 可再生 |
 | `data/decisions.json` | 决策日志 | **重要，必须备份** |
+| `data/strategies/*.yaml` | YAML策略配置 | 建议备份（可版本控制） |
 | `watchlist_cn.json` | 股票列表 | **重要，必须备份** |
 
 **Docker 卷映射:**

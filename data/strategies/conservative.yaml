@@ -1,0 +1,43 @@
+# conservative — 保守策略
+# 风险权重↑ 止损线紧 止盈线低 → 适合震荡/弱势市场
+
+name: conservative_v1
+version: 1
+description: "保守策略 — 重风控轻进攻"
+
+risk_profiles:
+  conservative:
+    stop_loss: 0.05
+    take_profit: 0.10
+  balanced:
+    stop_loss: 0.07
+    take_profit: 0.15
+  aggressive:
+    stop_loss: 0.10
+    take_profit: 0.25
+
+factors:
+  - name: 盈亏
+    weight: 0.20
+    evaluator: pnl
+  - name: 价位
+    weight: 0.10
+    evaluator: week52
+  - name: 风险
+    weight: 0.40
+    evaluator: risk
+  - name: 情绪
+    weight: 0.20
+    evaluator: sentiment
+  - name: 趋势
+    weight: 0.10
+    evaluator: regime
+
+portfolio:
+  black_swan_action: "清仓避险"
+  sell_majority_pct: 0.3
+  sell_majority_action: "减仓"
+  add_sentiment: "上升"
+  add_min_confidence: 80
+  add_action: "加仓"
+  default_action: "观望"

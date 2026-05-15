@@ -184,3 +184,82 @@ East Money datacenter API (`RPTA_APP_IPOAPPLY` + `RPT_BOND_CB_LIST`)，日期键
 - 日缓存 → 数据每日变更一次，无需分钟级刷新
 - 3天+未来 → 显示刚结束的(参考中签率)和即将来的
 - 8条上限 → UI 空间限制，14+卡片共存
+
+---
+
+## ADR-008: AutoDev — YAML 策略声明 + 自动决策循环
+
+| Field | Value |
+|-------|-------|
+| Status | Accepted |
+| Date | 2026-05 |
+| Context | 策略逻辑硬编码在 Python 里，无法对比/热加载/版本化。决策流程缺少闭环 |
+
+### Decision
+
+**两层分离：YAML 配置 (what) + Python 评估器 (how)**
+
+```
+data/strategies/rule_v1.yaml     ← 声明式：因子名/权重/阈值/风控线
+src/trading/strategy_loader.py   ← 5个注册评估器 + YAMLStrategy 类
+src/trading/autodev.py           ← 5步循环：observe → decide → act → evaluate → learn
+```
+
+**循环架构：**
+```
+observe(positions, context)
+    → decide(observation) → [Signal, ...]
+        → act(signals) → [Decision, ...]  (source="rule", tags=["autodev"])
+            → evaluate_past(current_prices) → [P&L, ...]
+                → learn() → {patterns, suggestions}
+                    ⟶ (OPEN) suggestions 不自动回写 YAML
+```
+
+### Rationale
+
+- **YAML over hardcode** → 改权重只改 YAML，改逻辑只改 evaluator，互不耦合
+- **YAMLStrategy implements Strategy Protocol** → 可直接注入 `evaluate_portfolio()`，与 RuleBasedStrategy 兼容
+- **评估器注册表** → `EVALUATORS = {"pnl": _eval_pnl, ...}`，新因子只需注册函数
+- **learn() 开环设计** → V1 只输出 suggestions，不自动修改配置。原因：
+  - 避免无人值守下策略漂移
+  - 保持人类审核（手动采纳建议后改 YAML）
+  - V2 可加 `apply_suggestions()` + 版本快照实现真闭环
+- **PyYAML 依赖** → ~100KB，标准配置库，不违反"纯 Python"原则
+
+### Current Loop Status (v3.2)
+
+| Step | 方法 | 输入 | 输出 | 状态 |
+|------|------|------|------|------|
+| **Observe** | `observe()` | positions + context | structured observation | ✅ |
+| **Decide** | `decide()` | observation | Signal per position | ✅ |
+| **Act** | `act()` | signals | Decision (journal entry) | ✅ |
+| **Evaluate** | `evaluate_past()` | current_prices | P&L + risk verdict | ✅ |
+| **Learn** | `learn()` | — | patterns + suggestions | ⚠️ 开环 |
+
+**闭环缺口：** `learn()` → `observe()` 之间无自动反馈。suggestions 需人工审核后手动修改 YAML。
+
+### Closing the Loop (Future V2)
+
+```
+learn() → suggestions
+    → apply_suggestions()        # 自动调整权重 (带上下限)
+    → save_strategy_version()    # 快照当前版本
+    → compare_versions()         # 新旧策略绩效对比
+    → promote_or_rollback()      # 人工确认后切换
+```
+
+### Alternatives Rejected
+
+- **eval() 条件表达式** → YAML 里写 `"pnl_pct <= -0.10"` 用 eval 执行 → 安全风险
+- **全自动闭环** → learn 直接改 YAML → 无人值守策略漂移，V1 不适合
+- **SQLite 策略存储** → 此规模 YAML 文件够用，人类可读可 Git 版本化
+- **无 YAML，纯 JSON** → YAML 注释支持、可读性更好
+
+### Files
+
+- `data/strategies/rule_v1.yaml` — 5因子基础策略 (盈亏0.30/风险0.25/情绪0.20/价位0.15/趋势0.10)
+- `data/strategies/conservative.yaml` — 保守变体 (风险0.40)
+- `src/trading/strategy_loader.py` — YAMLStrategy + 5 evaluators + load/list
+- `src/trading/autodev.py` — AutoDev loop (observe/decide/act/evaluate/learn)
+- `tests/test_strategy_loader.py` — 22 tests
+- `tests/test_autodev.py` — 25 tests

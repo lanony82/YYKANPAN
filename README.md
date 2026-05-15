@@ -88,7 +88,7 @@ pip install -r requirements.txt
 python src/server.py
 ```
 
-打开 http://127.0.0.1:5000 — 35 个 API 端点、14 张看板卡片、250+ 项测试覆盖。
+打开 http://127.0.0.1:5000 — 38 个 API 端点、14 张看板卡片、322 项测试覆盖。
 
 ---
 
@@ -111,6 +111,7 @@ python src/server.py
 | **选股策略** | 金叉/放量突破/超跌反弹/涨停接力 | 沪深300+涨停池 |
 | **参谋系统** | 可解释AI决策面板 + 5因子雷达图 + 止盈止损 | 规则引擎 |
 | **决策日志** | 结构化决策记录(BUY/SELL/HOLD) + 行为分析 + 模式挖掘 | 本地JSON |
+| **AutoDev** | YAML策略配置 + 自动决策循环 (observe→decide→act→evaluate→learn) | 规则引擎 |
 | **新股新债** | IPO/可转债 申购日历 | AkShare |
 | **AI策略** | 偏多/偏空/震荡 + 关注/风险标的 | 规则引擎 |
 | **数据源管理** | 自动测速/手动切换数据源优先级 | Sina/AkShare/Yahoo |
@@ -150,6 +151,8 @@ src/
     collect_stocks.py 每日 CSV 快照采集
   trading/
     decision.py       决策日志
+    strategy_loader.py YAML策略加载器
+    autodev.py        自动决策循环
   tools/
     bazi_core.py      八字/五运六气计算库
 static/
@@ -158,6 +161,9 @@ static/
   js/app.js           前端逻辑（petite-vue + vanilla JS）
 data/
   YYYY-MM-DD.csv      每日快照（保留最近5天）
+  strategies/
+    rule_v1.yaml      基础规则引擎（5因子加权打分）
+    conservative.yaml  保守策略（重风控轻进攻）
   sentiment_config.json     情绪阈值配置
   sentiment_history.json    情绪历史
   sentiment_last_known.json 情绪缓存
@@ -171,6 +177,8 @@ tests/
   test_analysis.py        分析引擎（21项）
   test_config.py          配置模块（4项）
   test_decision.py        决策日志（53项）
+  test_strategy_loader.py  策略加载器（22项）
+  test_autodev.py          自动决策循环（25项）
   test_new_features.py    新功能集成（33项）
   test_providers.py       数据源层（22项）
   test_screener.py        选股策略（23项）
@@ -214,6 +222,9 @@ tests/
 | `/api/decisions` | GET/POST/PUT/DELETE | 决策日志 CRUD | — |
 | `/api/decisions/evaluate/<id>` | POST | 评估单笔决策（P&L + 风控） | — |
 | `/api/decisions/analyze` | GET | 决策行为分析（模式挖掘） | — |
+| `/api/strategies` | GET | 可用YAML策略列表 | — |
+| `/api/autodev/cycle` | POST | 执行一轮AutoDev循环 | — |
+| `/api/autodev/status` | GET | AutoDev状态 + 策略信息 | — |
 | `/api/advisor` | GET | AI决策面板（可解释因子） | — |
 | `/api/advisor/save-decision` | POST | AI建议→决策日志 | — |
 | `/api/macro-history/<symbol>` | GET | 宏观指标历史 | — |
@@ -265,7 +276,7 @@ python src/collect_stocks.py          # 手动
 ## 测试
 
 ```powershell
-python -m pytest tests/                # 275 项全量测试
+python -m pytest tests/                # 322 项全量测试
 python -m pytest tests/ -x --tb=short  # 遇错即停
 python -m pytest tests/smoke_test.py   # 仅集成烟测（7项）
 ```
@@ -304,7 +315,7 @@ Run a quick end-to-end smoke test (local API + key endpoint contracts):
 python -m pytest tests/smoke_test.py
 ```
 
-Or run the full suite (275 tests):
+Or run the full suite (322 tests):
 
 ```powershell
 python -m pytest tests/ --tb=short

@@ -1,13 +1,14 @@
 # A-Share Dashboard: No-LLM Improvements Roadmap
 
-> 可在**无需外部 LLM 或 AI 模型**的情况下实现的功能改进清单。
-> 所有改进基于规则引擎、字典映射、历史数据和数学计算。
+> ⚠️ **状态说明 (2026-05 更新)**：部分功能已在 v2.x–v3.2 迭代中以不同形式实现。
+> 标记 ✅ = 已实现（可能方案不同）、⏳ = 部分实现、❌ = 未做。
+> 代码已从 `src/app.py` 迁移到 `src/server.py` + `src/analysis/` + `src/trading/`。
 
 ---
 
 ## Tier 1: 立即可做（0-2 小时）
 
-### 1.1 体积陷阱检测 (Volume Trap Detection)
+### 1.1 体积陷阱检测 (Volume Trap Detection) ❌
 
 **问题**：
 - 当前输出 "适合交易" 不考虑成交量确认
@@ -58,7 +59,7 @@ def _evaluate_market_sentiment_with_volume(
 
 ---
 
-### 1.2 宏观事件→持仓映射 (Macro Impact on Portfolio)
+### 1.2 宏观事件→持仓映射 (Macro Impact on Portfolio) ✅ (macro_impact in analysis/market.py)
 
 **问题**：
 - CPI 高 + 利率高 的消息存在，但不知道对我的持仓有什么影响
@@ -140,7 +141,7 @@ def _analyze_macro_portfolio_impact(
 
 ---
 
-### 1.3 主题旋转预警 (Theme Rotation Risk)
+### 1.3 主题旋转预警 (Theme Rotation Risk) ❌
 
 **问题**：
 - 当前只说"主线板块是新能源电池"，没说这个主线有多"老"
@@ -212,7 +213,7 @@ def _detect_theme_rotation_risk(
 
 ## Tier 2: 推荐做（1-2 小时）
 
-### 2.1 连板强度分级 (Limit-Up Intensity Grade)
+### 2.1 连板强度分级 (Limit-Up Intensity Grade) ✅ (sentiment.py 已有连板分级输出)
 
 **简化版**：不是只返回 `consecutive_limit_count` 数字，而是返回一个强度等级。
 
@@ -233,7 +234,7 @@ def grade_consecutive_strength(consecutive_limit_count: int) -> str:
 
 ---
 
-### 2.2 持仓分散度评分 (Portfolio Diversification Score)
+### 2.2 持仓分散度评分 (Portfolio Diversification Score) ✅ (advisor.py 集中度检测)
 
 **问题**：用户持仓 10 只股票都是"消费"，市场一旦消费走弱就全线亏
 
@@ -269,7 +270,7 @@ def calc_portfolio_concentration(holdings: list) -> dict:
 
 ---
 
-### 2.3 主题"热度"衰减曲线 (Theme Heat Decay)
+### 2.3 主题"热度"衰减曲线 (Theme Heat Decay) ❌
 
 **概念**：主线板块的"热度"会随时间衰减。第 1 天 100 热度，第 5 天可能只有 30。
 
@@ -302,7 +303,7 @@ def calc_theme_heat_decay(
 
 ## Tier 3: 架构优化（2-3 小时）
 
-### 3.1 龙头股策略模式
+### 3.1 龙头股策略模式 ✅ (screener.py HybridLeader 已实现)
 
 **当前**：硬编码一个 `leader_score` 公式  
 **改进**：使用策略模式，支持多种龙头识别方法
@@ -344,7 +345,7 @@ leaders = strategy.rank(sector_stocks)
 
 ---
 
-### 3.2 静态/动态数据分离 (Static vs. Dynamic Data Split)
+### 3.2 静态/动态数据分离 (Static vs. Dynamic Data Split) ❌
 
 **当前**：每次 `/api/stocks` 都抓一遍所有数据  
 **改进**：分离端点

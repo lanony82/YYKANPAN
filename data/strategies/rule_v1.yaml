@@ -1,0 +1,44 @@
+# rule_v1 — 基础规则引擎 V1
+# 5因子加权打分策略，YAML声明式配置
+# 修改权重/阈值即可创建新变体，无需改Python代码
+
+name: rule_v1
+version: 1
+description: "基础规则引擎 — 5因子加权打分"
+
+risk_profiles:
+  conservative:
+    stop_loss: 0.07
+    take_profit: 0.15
+  balanced:
+    stop_loss: 0.10
+    take_profit: 0.25
+  aggressive:
+    stop_loss: 0.15
+    take_profit: 0.40
+
+factors:
+  - name: 盈亏
+    weight: 0.30
+    evaluator: pnl
+  - name: 价位
+    weight: 0.15
+    evaluator: week52
+  - name: 风险
+    weight: 0.25
+    evaluator: risk
+  - name: 情绪
+    weight: 0.20
+    evaluator: sentiment
+  - name: 趋势
+    weight: 0.10
+    evaluator: regime
+
+portfolio:
+  black_swan_action: "清仓避险"
+  sell_majority_pct: 0.5
+  sell_majority_action: "减仓"
+  add_sentiment: "上升"
+  add_min_confidence: 70
+  add_action: "加仓"
+  default_action: "观望"

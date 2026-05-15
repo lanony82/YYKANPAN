@@ -554,3 +554,37 @@ Copy this template for each new patch:
   - Removed standalone `8zi.py` (superseded by bazi_core.py).
   - Removed standalone `widget.py` (unused widget script).
 - Validation: No imports reference deleted files; all tests pass.
+
+## 🎉 V3 — 2026-05-14
+
+### 45. Explainable AI advisor panel (v3.0)
+- File: src/analysis/advisor.py, src/server.py, static/js/app.js, static/css/style.css
+- Type: Feature
+- Summary:
+  - Strategy Protocol + RuleBasedStrategy with 5 weighted factors
+  - Factor radar chart SVG, per-factor breakdown bars
+  - Signal save-to-journal with trade fields
+- Validation: 25 advisor tests passed.
+
+### 46. Decision Engine upgrade (v3.1)
+- File: src/trading/decision.py, src/server.py, static/js/app.js, static/index.html
+- Type: Feature
+- Summary:
+  - Trade fields: symbol, price, size, confidence, stop_loss, take_profit, max_drawdown, source, trade_context
+  - evaluate() — P&L + stop-loss/take-profit detection + verdict insights
+  - analyze() — 5 behavioral patterns + stats
+  - Frontend trade form + analyze panel
+  - README rewrite as decision tracking system
+- Validation: 53 decision tests + 27 server_trading tests passed.
+
+### 47. AutoDev skeleton — YAML策略 + 自动决策循环 (v3.2)
+- File: src/trading/strategy_loader.py (new), src/trading/autodev.py (new), data/strategies/*.yaml (new)
+- Type: Feature
+- Summary:
+  - YAML declarative strategy configs (rule_v1 + conservative)
+  - strategy_loader: YAMLStrategy class + 5 evaluator functions + registry
+  - AutoDev loop: observe → decide → act → evaluate → learn
+  - 3 new API endpoints: /api/strategies, /api/autodev/cycle, /api/autodev/status
+  - learn() produces suggestions (weight_adjust, threshold, cooldown) but does NOT auto-apply (open loop)
+  - PyYAML dependency added
+- Validation: 22 strategy_loader + 25 autodev tests passed. Full suite 322 passed.
