@@ -2330,6 +2330,19 @@ def create_decision():
     if not title:
         return jsonify({"ok": False, "error": "title is required"}), 400
     try:
+        # Build kwargs — include trade fields if provided
+        kwargs = {}
+        for tf in ("symbol", "source"):
+            if data.get(tf):
+                kwargs[tf] = data[tf]
+        for tf in ("price", "stop_loss", "take_profit", "max_drawdown", "confidence"):
+            if data.get(tf) is not None:
+                kwargs[tf] = float(data[tf])
+        if data.get("size") is not None:
+            kwargs["size"] = int(data["size"])
+        if isinstance(data.get("trade_context"), dict):
+            kwargs["trade_context"] = data["trade_context"]
+
         d = dec.create_decision(
             title=title,
             dtype=data.get("type", "trade"),
@@ -2338,6 +2351,7 @@ def create_decision():
             outcome=data.get("outcome", ""),
             tags=data.get("tags", []),
             state=data.get("state", "idea"),
+            **kwargs,
         )
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
@@ -2440,6 +2454,7 @@ def advisor_endpoint():
                 "reasons": s.reasons,
                 "stop_loss": s.stop_loss,
                 "take_profit": s.take_profit,
+                "factors": s.factors,
             }
             for s in result.signals
         ],
@@ -2450,6 +2465,89 @@ def advisor_endpoint():
         },
         "msg": result.msg,
     })
+
+
+@app.route("/api/advisor/save-decision", methods=["POST"])
+def advisor_save_decision():
+    """Save an advisor signal as a decision journal entry."""
+    data = request.get_json(silent=True) or {}
+    ticker = data.get("ticker", "")
+    name = data.get("name", ticker)
+    action = data.get("action", "hold")
+    reasons = data.get("reasons", [])
+    factors = data.get("factors", [])
+    risk_pref = data.get("risk_pref", "balanced")
+    portfolio_action = data.get("portfolio_action", "")
+
+    action_label = {
+        "buy": "买入", "sell": "卖出", "hold": "持有",
+        "reduce": "减仓", "add": "加仓",
+    }
+    title = f"[AI建议] {name} ({ticker}) → {action_label.get(action, action)}"
+    context_parts = [f"风险偏好: {risk_pref}", f"组合建议: {portfolio_action}"]
+    action_text = "；".join(reasons) if reasons else "无明显信号"
+    factor_lines = [f"{f['name']}({f['score']:+d}): {f['detail']}" for f in factors]
+    context_text = " | ".join(context_parts)
+    if factor_lines:
+        context_text += "\n因子分析: " + " / ".join(factor_lines)
+
+    # Build structured trade context for the Decision model
+    trade_ctx = {
+        "risk_pref": risk_pref,
+        "portfolio_action": portfolio_action,
+        "factors": factors,
+    }
+    # Map advisor action → Decision action
+    dec_action = {
+        "buy": "BUY", "add": "BUY",
+        "sell": "SELL", "reduce": "SELL",
+        "hold": "HOLD",
+    }.get(action, "HOLD")
+
+    # Extract price/size from posted data (frontend sends position info)
+    price = data.get("price", 0)
+    size = data.get("size", 0)
+    strength = data.get("strength", 1)
+
+    try:
+        entry = dec.create_decision(
+            title=title,
+            dtype="trade",
+            context=context_text,
+            action=dec_action,
+            tags=["ai-advisor", ticker],
+            state="idea",
+            symbol=name,
+            price=float(price) if price else 0.0,
+            size=int(size) if size else 0,
+            confidence=strength / 5.0 if strength else 0.2,
+            stop_loss=data.get("stop_loss"),
+            take_profit=data.get("take_profit"),
+            source="ai",
+            trade_context=trade_ctx,
+        )
+        return jsonify({"ok": True, "decision": entry})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+
+@app.route("/api/decisions/evaluate/<decision_id>", methods=["POST"])
+def evaluate_decision(decision_id):
+    """Evaluate a trade decision against current price."""
+    data = request.get_json(silent=True) or {}
+    current_price = data.get("current_price", 0)
+    if not current_price or float(current_price) <= 0:
+        return jsonify({"ok": False, "error": "current_price required (>0)"}), 400
+    result = dec.evaluate(decision_id, float(current_price))
+    status = 200 if result.get("ok") else 400
+    return jsonify(result), status
+
+
+@app.route("/api/decisions/analyze", methods=["GET"])
+def analyze_decisions():
+    """Analyze trade decisions for behavioral patterns."""
+    dtype = request.args.get("type", "trade")
+    return jsonify(dec.analyze(dtype=dtype))
 
 
 # ── Serve frontend ────────────────────────────────────────────────────────────

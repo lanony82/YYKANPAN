@@ -339,7 +339,7 @@ Evaluate impact of macro indicator change.
 ## Advisor (参谋)
 
 ### GET /api/advisor
-Portfolio trading signal evaluation.
+Portfolio trading signal evaluation with explainable factor analysis.
 
 **Params**:
 - `risk_pref`: `"conservative"` | `"balanced"` (default) | `"aggressive"`
@@ -354,21 +354,60 @@ Portfolio trading signal evaluation.
   "ok": true,
   "generated_at": "2026-05-12 14:30:00",
   "strategy": "rule_v1",
-  "portfolio_action": "observe",
-  "portfolio_reason": "当前市场震荡，无明确方向信号",
+  "portfolio_action": "观望",
+  "portfolio_reason": "综合信号无明确方向，建议观望",
   "signals": [{
     "ticker": "600519.SS",
     "name": "贵州茅台",
     "action": "hold",
     "strength": 1,
-    "reasons": ["无触发信号"],
+    "reasons": ["无明显信号，建议持有观望"],
     "stop_loss": 1530.0,
-    "take_profit": 2125.0
+    "take_profit": 2125.0,
+    "factors": [
+      {"name": "盈亏", "score": 1, "weight": 0.30, "detail": "浮盈 5.0%"},
+      {"name": "价位", "score": 0, "weight": 0.15, "detail": "52周区间 60% 位置"},
+      {"name": "风险", "score": 0, "weight": 0.25, "detail": "无风险事件"},
+      {"name": "情绪", "score": 0, "weight": 0.20, "detail": "情绪: 分歧"},
+      {"name": "趋势", "score": 0, "weight": 0.10, "detail": "市场: 震荡，信心: 50%"}
+    ]
   }],
   "context": {"regime": "震荡", "sentiment_stage": "分歧", "confidence": 65.0},
   "msg": ""
 }
 ```
+
+Factor scores range from -2 (very bearish) to +2 (very bullish). Weights sum to 1.0.
+
+### POST /api/advisor/save-decision
+Save an advisor signal as a decision journal entry (auto-creates trade decision).
+
+**Body**:
+```json
+{
+  "ticker": "600519.SS",
+  "name": "贵州茅台",
+  "action": "sell",
+  "reasons": ["浮亏 -12%，触及止损线"],
+  "factors": [{"name": "盈亏", "score": -2, "weight": 0.3, "detail": "浮亏"}],
+  "risk_pref": "balanced",
+  "portfolio_action": "减仓",
+  "price": 1700,
+  "size": 1000,
+  "stop_loss": 1530,
+  "take_profit": 2125,
+  "strength": 4
+}
+```
+
+**Response**: `{"ok": true, "decision": {...}}`
+
+The decision is created with:
+- `action` mapped to BUY/SELL/HOLD
+- `source` = "ai"
+- `confidence` = strength / 5.0
+- Trading fields: symbol, price, size, stop_loss, take_profit
+- `trade_context`: { risk_pref, portfolio_action, factors }
 
 ---
 
@@ -424,12 +463,24 @@ Create a new decision.
   "type": "trade",
   "state": "idea",
   "context": "当时环境...",
-  "action": "计划做什么",
+  "action": "BUY",
   "outcome": "",
-  "tags": ["白酒", "价值投资"]
+  "tags": ["白酒", "价值投资"],
+  "symbol": "贵州茅台",
+  "price": 1700,
+  "size": 1000,
+  "confidence": 0.7,
+  "stop_loss": 1530,
+  "take_profit": 2125,
+  "max_drawdown": 0.15,
+  "source": "manual",
+  "trade_context": {"type": "breakout", "volume": "high"}
 }
 ```
 - `title` required
+- Trade fields (symbol, price, size, confidence, stop_loss, take_profit, max_drawdown, source, trade_context) are optional and only stored for `type=trade`
+- `source`: "manual" | "rule" | "ai"
+- `confidence`: 0~1 (clamped)
 
 **Response** `201`:
 ```json
@@ -452,6 +503,67 @@ Delete a decision.
 
 **Response**: `{"ok": true}`  
 **Error** `404`: `{"ok": false, "error": "not found"}`
+
+---
+
+### POST /api/decisions/evaluate/:id
+Evaluate a trade decision against current market price.
+
+**Body**: `{"current_price": 35.5}`
+
+**Response**:
+```json
+{
+  "ok": true,
+  "decision_id": "abc123",
+  "symbol": "晶合集成",
+  "entry_price": 33.7,
+  "current_price": 35.5,
+  "size": 1000,
+  "pnl": 1800.0,
+  "pnl_pct": 5.34,
+  "hit_stop_loss": false,
+  "hit_take_profit": false,
+  "risk_ok": true,
+  "verdict": "盈利",
+  "confidence": 0.6,
+  "source": "manual"
+}
+```
+
+Verdict includes contextual insights:
+- High-confidence loss → "高信心决策亏损，需复盘"
+- Low-confidence win → "低信心决策盈利，可能运气"
+- Max drawdown breach → "超过最大回撤容忍"
+
+---
+
+### GET /api/decisions/analyze
+Analyze trade decisions for behavioral patterns.
+
+**Params**: `type` (default: "trade")
+
+**Response**:
+```json
+{
+  "ok": true,
+  "total": 15,
+  "with_price": 12,
+  "buys": 8,
+  "sells": 4,
+  "holds": 3,
+  "avg_confidence": 0.58,
+  "by_source": {"manual": 10, "ai": 5},
+  "by_state": {"idea": 3, "decided": 2, "acted": 8, "reviewed": 2},
+  "patterns": [
+    {"type": "low_confidence", "label": "有 3 笔低信心决策（<40%），建议减少冲动交易", "severity": "warn", "count": 3},
+    {"type": "no_stop_loss", "label": "有 5 笔买入没设止损，风控缺失", "severity": "danger", "count": 5},
+    {"type": "no_review", "label": "有 8 笔已执行但未复盘，缺少反馈闭环", "severity": "info", "count": 8}
+  ]
+}
+```
+
+Pattern types: `low_confidence`, `no_stop_loss`, `no_review`, `ai_ratio`, `overtrading`
 
 ---
 
@@ -675,15 +787,18 @@ Get recent closing prices for a macro indicator (for sparkline).
 | 17 | GET | `/api/risk-events` | Risk radar |
 | 18 | POST | `/api/quickread` | News analysis |
 | 19 | POST | `/api/macro-impact` | Macro impact |
-| 20 | GET | `/api/advisor` | Trading advisor |
-| 21 | GET | `/api/xingu-xinzhai` | IPO/bond |
-| 22 | GET/POST/PUT/DELETE | `/api/decisions` | Decision journal |
-| 23 | GET | `/api/bazi` | Daily bazi |
-| 24 | GET | `/api/config/export` | Export config |
-| 25 | POST | `/api/config/import` | Import config |
-| 26 | POST | `/api/providers/test` | Provider benchmark |
-| 27 | GET/POST | `/api/providers/order` | Provider order |
-| 28 | POST | `/api/providers/auto` | Auto-order providers |
-| 29 | GET | `/api/glossary` | Term glossary |
-| 30 | GET | `/api/screener/strategies` | Screener strategies |
-| 31 | GET | `/api/screener` | Run stock screen |
+| 20 | GET | `/api/advisor` | Trading advisor (explainable) |
+| 21 | POST | `/api/advisor/save-decision` | Save signal → journal |
+| 23 | GET | `/api/xingu-xinzhai` | IPO/bond |
+| 24 | GET/POST/PUT/DELETE | `/api/decisions` | Decision journal CRUD |
+| 25 | POST | `/api/decisions/evaluate/:id` | Evaluate trade decision |
+| 26 | GET | `/api/decisions/analyze` | Decision pattern analysis |
+| 27 | GET | `/api/bazi` | Daily bazi |
+| 28 | GET | `/api/config/export` | Export config |
+| 29 | POST | `/api/config/import` | Import config |
+| 30 | POST | `/api/providers/test` | Provider benchmark |
+| 31 | GET/POST | `/api/providers/order` | Provider order |
+| 32 | POST | `/api/providers/auto` | Auto-order providers |
+| 33 | GET | `/api/glossary` | Term glossary |
+| 34 | GET | `/api/screener/strategies` | Screener strategies |
+| 35 | GET | `/api/screener` | Run stock screen |

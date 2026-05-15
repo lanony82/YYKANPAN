@@ -179,3 +179,161 @@ class TestDoubleCheckedLocking:
             assert r == [SAMPLE_STOCK]
         # CSV loaded at most twice (first call + possible race before lock)
         assert mock_csv.call_count <= 2
+
+
+# ── Advisor save-decision endpoint ──────────────────────────────────────────
+
+class TestAdvisorSaveDecision:
+    """Test POST /api/advisor/save-decision."""
+
+    @pytest.fixture(autouse=True)
+    def _client_and_tmp(self, tmp_path, monkeypatch):
+        from trading import decision as dec_mod
+        tmp_file = tmp_path / "decisions.json"
+        monkeypatch.setattr(dec_mod, "_DECISIONS_FILE", tmp_file)
+        stock_app.app.config["TESTING"] = True
+        self.client = stock_app.app.test_client()
+        self.dec_mod = dec_mod
+
+    def test_save_basic(self):
+        resp = self.client.post("/api/advisor/save-decision", json={
+            "ticker": "600519.SS",
+            "name": "贵州茅台",
+            "action": "sell",
+            "reasons": ["浮亏 -12%，触及止损线"],
+            "factors": [{"name": "盈亏", "score": -2, "weight": 0.3, "detail": "浮亏"}],
+            "risk_pref": "balanced",
+            "portfolio_action": "减仓",
+        })
+        data = resp.get_json()
+        assert data["ok"] is True
+        dec = data["decision"]
+        assert "[AI建议]" in dec["title"]
+        assert "600519.SS" in dec["title"]
+        assert dec["type"] == "trade"
+        assert dec["state"] == "idea"
+        assert "ai-advisor" in dec["tags"]
+
+    def test_save_creates_in_journal(self):
+        self.client.post("/api/advisor/save-decision", json={
+            "ticker": "000001.SZ",
+            "name": "平安银行",
+            "action": "hold",
+            "reasons": [],
+        })
+        decisions = self.dec_mod.list_decisions()
+        assert len(decisions) == 1
+        assert "平安银行" in decisions[0]["title"]
+
+    def test_save_includes_factors_in_context(self):
+        resp = self.client.post("/api/advisor/save-decision", json={
+            "ticker": "600519.SS",
+            "name": "贵州茅台",
+            "action": "add",
+            "reasons": ["接近52周低点"],
+            "factors": [
+                {"name": "盈亏", "score": 1, "weight": 0.3, "detail": "浮盈 5%"},
+                {"name": "趋势", "score": 1, "weight": 0.1, "detail": "偏强"},
+            ],
+        })
+        dec = resp.get_json()["decision"]
+        assert "因子分析" in dec["context"]
+        assert "盈亏" in dec["context"]
+
+    def test_save_includes_trade_fields(self):
+        resp = self.client.post("/api/advisor/save-decision", json={
+            "ticker": "600519.SS",
+            "name": "贵州茅台",
+            "action": "buy",
+            "reasons": ["突破"],
+            "price": 1700,
+            "size": 1000,
+            "stop_loss": 1530,
+            "take_profit": 2125,
+            "strength": 4,
+        })
+        dec = resp.get_json()["decision"]
+        assert dec["symbol"] == "贵州茅台"
+        assert dec["price"] == 1700
+        assert dec["size"] == 1000
+        assert dec["stop_loss"] == 1530
+        assert dec["take_profit"] == 2125
+        assert dec["confidence"] == 0.8  # strength 4 / 5
+        assert dec["source"] == "ai"
+        assert dec["action"] == "BUY"
+
+
+# ── Evaluate endpoint ──────────────────────────────────────────────────────
+
+class TestEvaluateEndpoint:
+    """Test POST /api/decisions/evaluate/<id>."""
+
+    @pytest.fixture(autouse=True)
+    def _client_and_tmp(self, tmp_path, monkeypatch):
+        from trading import decision as dec_mod
+        tmp_file = tmp_path / "decisions.json"
+        monkeypatch.setattr(dec_mod, "_DECISIONS_FILE", tmp_file)
+        stock_app.app.config["TESTING"] = True
+        self.client = stock_app.app.test_client()
+        self.dec_mod = dec_mod
+
+    def test_evaluate_profit(self):
+        d = self.dec_mod.create_decision("buy X", action="BUY", symbol="X", price=10, size=100)
+        resp = self.client.post(f"/api/decisions/evaluate/{d['id']}", json={"current_price": 12})
+        data = resp.get_json()
+        assert data["ok"]
+        assert data["pnl"] == 200.0
+        assert "盈利" in data["verdict"]
+
+    def test_evaluate_no_price(self):
+        resp = self.client.post("/api/decisions/evaluate/abc123", json={})
+        assert resp.status_code == 400
+
+    def test_evaluate_not_found(self):
+        resp = self.client.post("/api/decisions/evaluate/nonexistent", json={"current_price": 10})
+        assert resp.status_code == 400
+
+
+# ── Analyze endpoint ──────────────────────────────────────────────────────
+
+class TestAnalyzeEndpoint:
+    """Test GET /api/decisions/analyze."""
+
+    @pytest.fixture(autouse=True)
+    def _client_and_tmp(self, tmp_path, monkeypatch):
+        from trading import decision as dec_mod
+        tmp_file = tmp_path / "decisions.json"
+        monkeypatch.setattr(dec_mod, "_DECISIONS_FILE", tmp_file)
+        stock_app.app.config["TESTING"] = True
+        self.client = stock_app.app.test_client()
+        self.dec_mod = dec_mod
+
+    def test_analyze_empty(self):
+        resp = self.client.get("/api/decisions/analyze")
+        data = resp.get_json()
+        assert data["ok"]
+        assert data["total"] == 0
+
+    def test_analyze_with_data(self):
+        self.dec_mod.create_decision("b1", action="BUY", symbol="A", price=10)
+        self.dec_mod.create_decision("s1", action="SELL", symbol="B", price=20)
+        resp = self.client.get("/api/decisions/analyze")
+        data = resp.get_json()
+        assert data["total"] == 2
+        assert data["buys"] == 1
+        assert data["sells"] == 1
+
+    def test_analyze_patterns(self):
+        self.dec_mod.create_decision("fomo", action="BUY", symbol="X", price=10, confidence=0.2)
+        resp = self.client.get("/api/decisions/analyze")
+        data = resp.get_json()
+        types = [p["type"] for p in data["patterns"]]
+        assert "low_confidence" in types
+        assert "no_stop_loss" in types
+
+    def test_analyze_filter_type(self):
+        self.dec_mod.create_decision("t", dtype="trade", action="BUY", symbol="X", price=10)
+        self.dec_mod.create_decision("l", dtype="life")
+        resp = self.client.get("/api/decisions/analyze?type=trade")
+        data = resp.get_json()
+        assert data["total"] == 1

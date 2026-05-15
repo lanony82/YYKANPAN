@@ -620,6 +620,61 @@ header {
 }
 .dec-card-actions button:hover { color: var(--text); border-color: var(--accent); }
 
+/* Trade info in decision cards */
+.dec-trade-info {
+  display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+  font-size: .72rem; margin-top: 4px;
+}
+.dec-action-badge {
+  font-weight: 700; font-size: .65rem; padding: 1px 5px; border-radius: 3px;
+}
+.dec-src-badge {
+  font-size: .6rem; padding: 1px 4px; border-radius: 3px;
+  background: rgba(56,139,253,.15); color: var(--accent);
+}
+
+/* Trade fields in form */
+.dec-trade-fields {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px; background: rgba(56,139,253,.05); border-radius: 6px;
+  border: 1px dashed var(--border);
+}
+.dec-trade-fields input, .dec-trade-fields select {
+  flex: 1; min-width: 0;
+}
+
+/* Analyze button */
+.dec-analyze-btn {
+  background: transparent; border: 1px solid var(--border); color: var(--muted);
+  border-radius: 4px; padding: 2px 8px; font-size: .75rem; cursor: pointer;
+}
+.dec-analyze-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+/* Analyze panel */
+.dec-analyze-panel {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px; margin-bottom: 8px;
+}
+.dec-analyze-stats {
+  display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.dec-stat { text-align: center; }
+.dec-stat-num { display: block; font-size: 1.2rem; font-weight: 700; }
+.dec-stat-label { font-size: .7rem; color: var(--muted); }
+.dec-analyze-sources {
+  display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.dec-src-chip {
+  font-size: .7rem; padding: 2px 6px; border-radius: 4px;
+  background: rgba(139,148,158,.15); color: var(--muted);
+}
+.dec-analyze-patterns { margin-top: 8px; }
+.dec-pattern {
+  padding: 4px 8px; margin-bottom: 4px; border-radius: 4px;
+  background: rgba(139,148,158,.06); font-size: .78rem;
+}
+.dec-pattern-label { line-height: 1.4; }
+
 /* List view */
 .dec-list-view { display: flex; flex-direction: column; gap: 4px; }
 .dec-list-item {
@@ -758,7 +813,7 @@ header {
 .xgxz-table .xgxz-past { color: var(--muted); }
 .xgxz-empty { color: var(--muted); font-size: .82rem; padding: 6px 0; }
 
-/* ── Advisor Card ─────────────────────────────────────────────────────────── */
+/* ── Advisor Card (可解释AI决策面板) ───────────────────────────────────────── */
 .advisor-controls {
   display: flex; align-items: center; gap: 8px; margin: 6px 0 8px;
 }
@@ -775,44 +830,125 @@ header {
 .advisor-status { font-size: .75rem; color: var(--muted); }
 .advisor-body { margin-top: 4px; }
 .advisor-empty { color: var(--muted); font-size: .82rem; padding: 6px 0; }
-.advisor-portfolio {
-  background: rgba(103,58,183,.08); border: 1px solid rgba(124,77,255,.2);
-  border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; font-size: .82rem;
-}
-.advisor-portfolio-action {
-  font-weight: 600; font-size: .9rem; margin-bottom: 3px;
-}
-.advisor-portfolio-action.reduce { color: #f85149; }
-.advisor-portfolio-action.add { color: #3fb950; }
-.advisor-portfolio-action.observe { color: var(--accent); }
-.advisor-ctx { color: var(--muted); font-size: .72rem; margin-top: 4px; }
-.advisor-signals { display: flex; flex-direction: column; gap: 6px; }
-.advisor-signal {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 6px; padding: 8px 10px; font-size: .8rem;
-}
-.advisor-signal-head {
-  display: flex; align-items: center; gap: 8px; margin-bottom: 3px;
-}
-.advisor-signal-name { font-weight: 600; }
-.advisor-signal-action {
-  font-size: .72rem; padding: 1px 6px; border-radius: 3px; font-weight: 600;
-}
-.advisor-signal-action.sell { background: rgba(248,81,73,.15); color: #f85149; }
-.advisor-signal-action.buy { background: rgba(63,185,80,.15); color: #3fb950; }
-.advisor-signal-action.hold { background: rgba(139,148,158,.15); color: #8b949e; }
-.advisor-signal-strength {
-  font-size: .7rem; color: var(--muted); margin-left: auto;
-}
-.advisor-signal-reasons {
-  color: var(--muted); font-size: .75rem; line-height: 1.4;
-}
-.advisor-signal-prices {
-  font-size: .72rem; color: var(--accent); margin-top: 3px;
-}
 .advisor-no-positions {
   color: var(--muted); font-size: .82rem; padding: 10px 0;
   text-align: center;
+}
+
+/* Portfolio action banner */
+.advisor-portfolio {
+  border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; font-size: .82rem;
+}
+.advisor-portfolio.pa-hold { background: rgba(103,58,183,.08); border: 1px solid rgba(124,77,255,.2); }
+.advisor-portfolio.pa-add { background: rgba(63,185,80,.08); border: 1px solid rgba(63,185,80,.25); }
+.advisor-portfolio.pa-reduce { background: rgba(248,81,73,.08); border: 1px solid rgba(248,81,73,.25); }
+.advisor-portfolio.pa-danger { background: rgba(248,81,73,.15); border: 1px solid rgba(248,81,73,.4); }
+.advisor-portfolio-action {
+  font-weight: 700; font-size: 1rem; margin-bottom: 4px;
+}
+.pa-add .advisor-portfolio-action { color: var(--up); }
+.pa-reduce .advisor-portfolio-action { color: var(--down); }
+.pa-danger .advisor-portfolio-action { color: #f85149; }
+.pa-hold .advisor-portfolio-action { color: var(--accent); }
+.advisor-portfolio-reason { font-size: .78rem; color: var(--muted); margin-bottom: 6px; }
+.advisor-ctx {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px;
+}
+.advisor-ctx-chip {
+  font-size: .7rem; padding: 2px 7px; border-radius: 3px;
+  background: rgba(139,148,158,.1); color: var(--muted);
+}
+.advisor-ctx-chip b { color: var(--text); }
+
+/* Signal cards */
+.advisor-signals { display: flex; flex-direction: column; gap: 8px; }
+.advisor-signal {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px 12px; font-size: .8rem;
+}
+.advisor-signal-head {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+}
+.advisor-signal-name { font-weight: 600; }
+.advisor-signal-action {
+  font-size: .72rem; padding: 2px 8px; border-radius: 3px; font-weight: 600;
+}
+.advisor-signal-action.ac-sell { background: rgba(248,81,73,.15); color: #f85149; }
+.advisor-signal-action.ac-buy { background: rgba(63,185,80,.15); color: #3fb950; }
+.advisor-signal-action.ac-hold { background: rgba(139,148,158,.15); color: #8b949e; }
+.advisor-signal-strength {
+  font-size: .7rem; color: var(--muted); margin-left: auto; letter-spacing: 1px;
+}
+
+/* Explainable section: radar + factor bars */
+.advisor-explain {
+  display: flex; gap: 12px; align-items: flex-start; margin: 6px 0;
+}
+.advisor-radar-wrap {
+  flex-shrink: 0;
+}
+.advisor-radar { display: block; }
+.advisor-factors {
+  flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0;
+}
+.factor-row {
+  display: grid; grid-template-columns: 32px 1fr 28px; gap: 4px;
+  align-items: center; font-size: .72rem;
+}
+.factor-name { font-weight: 600; color: var(--text); white-space: nowrap; }
+.factor-track {
+  position: relative; height: 10px; background: rgba(139,148,158,.1);
+  border-radius: 5px; overflow: hidden;
+}
+.factor-center {
+  position: absolute; left: 50%; top: 0; bottom: 0; width: 1px;
+  background: var(--border);
+}
+.factor-fill {
+  position: absolute; top: 1px; bottom: 1px; left: 0;
+  border-radius: 4px; transition: width .4s ease;
+}
+.factor-fill.factor-pos { background: var(--up); opacity: 0.5; }
+.factor-fill.factor-neg { background: var(--down); opacity: 0.5; }
+.factor-fill.factor-neu { background: var(--muted); opacity: 0.3; }
+.factor-score { font-size: .7rem; font-weight: 600; text-align: right; }
+.factor-score.factor-pos { color: var(--up); }
+.factor-score.factor-neg { color: var(--down); }
+.factor-score.factor-neu { color: var(--muted); }
+.factor-detail {
+  grid-column: 1 / -1; color: var(--muted); font-size: .68rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  padding-left: 36px;
+}
+
+/* Reasons chips */
+.advisor-signal-reasons {
+  display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0;
+}
+.advisor-reason-chip {
+  font-size: .7rem; padding: 2px 6px; border-radius: 3px;
+  background: rgba(139,148,158,.08); color: var(--muted);
+}
+
+/* Footer: price levels + save button */
+.advisor-signal-footer {
+  display: flex; align-items: center; gap: 8px; margin-top: 6px;
+}
+.advisor-signal-prices {
+  font-size: .72rem; color: var(--accent);
+}
+.advisor-save-btn {
+  margin-left: auto; font-size: .7rem; padding: 2px 8px;
+  background: rgba(103,58,183,.12); border: 1px solid rgba(124,77,255,.25);
+  color: #ce93d8; border-radius: 3px; cursor: pointer;
+  transition: background .2s;
+}
+.advisor-save-btn:hover { background: rgba(103,58,183,.25); }
+
+/* Responsive: stack radar on small screens */
+@media (max-width: 500px) {
+  .advisor-explain { flex-direction: column; align-items: center; }
+  .advisor-radar-wrap { margin-bottom: 4px; }
 }
 
 .table-wrap {

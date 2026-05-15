@@ -300,3 +300,100 @@ class TestPriceSuggestions:
         sig = result.signals[0]
         assert sig.stop_loss == 90.0   # 100 * (1 - 0.10)
         assert sig.take_profit == 125.0  # 100 * (1 + 0.25)
+
+
+# ── Test 18: Factor scores present in signal ────────────────────────────────
+
+class TestFactors:
+    def test_factors_returned(self):
+        """Every signal should have 5 factors."""
+        pos = _pos(cost=100, price=105, high52=120, low52=80)
+        result = evaluate_portfolio([pos], _ctx())
+        sig = result.signals[0]
+        assert len(sig.factors) == 5
+        names = {f["name"] for f in sig.factors}
+        assert names == {"盈亏", "价位", "风险", "情绪", "趋势"}
+
+    def test_factor_scores_range(self):
+        """All factor scores should be in [-2, +2]."""
+        pos = _pos(cost=100, price=92, high52=120, low52=80)
+        events = [{"severity": "high", "title": "暴跌"}]
+        ctx = _ctx(sentiment_stage="退潮", tradable=False, risk_events=events)
+        result = evaluate_portfolio([pos], ctx, risk_pref="conservative")
+        sig = result.signals[0]
+        for f in sig.factors:
+            assert -2 <= f["score"] <= 2, f"{f['name']} score out of range: {f['score']}"
+            assert 0 < f["weight"] <= 1.0
+
+    def test_stop_loss_factor_neg2(self):
+        """Stop-loss trigger → 盈亏 factor = -2."""
+        pos = _pos(cost=100, price=85)  # -15%
+        result = evaluate_portfolio([pos], _ctx(), risk_pref="balanced")
+        sig = result.signals[0]
+        pnl_f = next(f for f in sig.factors if f["name"] == "盈亏")
+        assert pnl_f["score"] == -2
+
+    def test_take_profit_factor_pos2(self):
+        """Take-profit trigger → 盈亏 factor = +2."""
+        pos = _pos(cost=100, price=130)  # +30%
+        result = evaluate_portfolio([pos], _ctx(), risk_pref="balanced")
+        sig = result.signals[0]
+        pnl_f = next(f for f in sig.factors if f["name"] == "盈亏")
+        assert pnl_f["score"] == 2
+
+    def test_black_swan_risk_factor(self):
+        """Black swan → 风险 factor = -2."""
+        events = [{"severity": "high", "title": "暴跌"}]
+        pos = _pos(cost=100, price=100)
+        result = evaluate_portfolio([pos], _ctx(risk_events=events))
+        sig = result.signals[0]
+        risk_f = next(f for f in sig.factors if f["name"] == "风险")
+        assert risk_f["score"] == -2
+
+    def test_grey_rhino_risk_factor(self):
+        """Grey rhino → 风险 factor = -1."""
+        events = [{"severity": "medium", "title": "波动"}]
+        pos = _pos(cost=100, price=100)
+        result = evaluate_portfolio([pos], _ctx(risk_events=events))
+        sig = result.signals[0]
+        risk_f = next(f for f in sig.factors if f["name"] == "风险")
+        assert risk_f["score"] == -1
+
+    def test_rising_sentiment_factor(self):
+        """上升 sentiment → 情绪 factor = +2."""
+        pos = _pos(cost=100, price=105)
+        result = evaluate_portfolio([pos], _ctx(sentiment_stage="上升"))
+        sig = result.signals[0]
+        sent_f = next(f for f in sig.factors if f["name"] == "情绪")
+        assert sent_f["score"] == 2
+
+    def test_ebb_sentiment_factor(self):
+        """退潮 + not tradable → 情绪 factor = -2."""
+        pos = _pos(cost=100, price=105)
+        result = evaluate_portfolio([pos], _ctx(sentiment_stage="退潮", tradable=False))
+        sig = result.signals[0]
+        sent_f = next(f for f in sig.factors if f["name"] == "情绪")
+        assert sent_f["score"] == -2
+
+    def test_strong_regime_factor(self):
+        """偏强 regime → 趋势 factor = +1."""
+        pos = _pos(cost=100, price=105)
+        result = evaluate_portfolio([pos], _ctx(regime="偏强"))
+        sig = result.signals[0]
+        regime_f = next(f for f in sig.factors if f["name"] == "趋势")
+        assert regime_f["score"] == 1
+
+    def test_data_missing_no_factors(self):
+        """price=0 → no factors."""
+        pos = _pos(cost=100, price=0)
+        result = evaluate_portfolio([pos], _ctx())
+        sig = result.signals[0]
+        assert sig.factors == []
+
+    def test_factor_weights_sum(self):
+        """Factor weights should sum to 1.0."""
+        pos = _pos(cost=100, price=105, high52=120, low52=80)
+        result = evaluate_portfolio([pos], _ctx())
+        sig = result.signals[0]
+        total = sum(f["weight"] for f in sig.factors)
+        assert abs(total - 1.0) < 0.01

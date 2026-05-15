@@ -2308,12 +2308,26 @@ updateAutoRefreshStatus();
   function makeCardHTML(d) {
     const tags = (d.tags || []).map(t => `<span class="dec-tag">${esc(t)}</span>`).join("");
     const time = d.created_at ? d.created_at.slice(5, 16) : "";
+    // Trade info line
+    let tradeInfo = "";
+    if (d.type === "trade" && d.symbol) {
+      const actionCls = (d.action || "").toUpperCase();
+      const badge = actionCls === "BUY" ? "ac-buy" : actionCls === "SELL" ? "ac-sell" : "ac-hold";
+      const parts = [`<span class="dec-action-badge ${badge}">${d.action || "HOLD"}</span>`];
+      parts.push(`<span>${esc(d.symbol)}</span>`);
+      if (d.price) parts.push(`<span>¥${d.price}</span>`);
+      if (d.size) parts.push(`<span>×${d.size}</span>`);
+      if (d.confidence) parts.push(`<span title="信心">🎯${(d.confidence * 100).toFixed(0)}%</span>`);
+      if (d.source && d.source !== "manual") parts.push(`<span class="dec-src-badge">${d.source}</span>`);
+      tradeInfo = `<div class="dec-trade-info">${parts.join(" ")}</div>`;
+    }
     return `<div class="dec-card" draggable="true" data-id="${d.id}">
       <div class="dec-card-title">${esc(d.title)}</div>
       <div class="dec-card-meta">
         <span class="dec-type-badge" data-type="${d.type}">${TYPE_LABEL[d.type] || d.type}</span>
         ${tags}
       </div>
+      ${tradeInfo}
       ${d.context ? `<div class="dec-card-time" title="环境">${esc(d.context.slice(0, 60))}</div>` : ""}
       <div class="dec-card-time">${time}</div>
       <div class="dec-card-actions">
@@ -2408,28 +2422,57 @@ updateAutoRefreshStatus();
   document.getElementById("btn-dec-save")?.addEventListener("click", async () => {
     const title = document.getElementById("dec-title")?.value?.trim();
     if (!title) { document.getElementById("dec-msg").textContent = "请输入标题"; return; }
+    const dtype = document.getElementById("dec-type")?.value || "trade";
     const body = {
       title,
-      type: document.getElementById("dec-type")?.value || "trade",
+      type: dtype,
       state: document.getElementById("dec-state")?.value || "idea",
       context: document.getElementById("dec-context")?.value || "",
       action: document.getElementById("dec-action")?.value || "",
       outcome: document.getElementById("dec-outcome")?.value || "",
       tags: (document.getElementById("dec-tags")?.value || "").split(",").map(s => s.trim()).filter(Boolean),
     };
+    // Attach trade fields if type=trade
+    if (dtype === "trade") {
+      const tradeAction = document.getElementById("dec-trade-action")?.value;
+      if (tradeAction) body.action = tradeAction;
+      const symbol = document.getElementById("dec-symbol")?.value?.trim();
+      if (symbol) body.symbol = symbol;
+      const price = parseFloat(document.getElementById("dec-price")?.value);
+      if (price > 0) body.price = price;
+      const size = parseInt(document.getElementById("dec-size")?.value);
+      if (size > 0) body.size = size;
+      const sl = parseFloat(document.getElementById("dec-stoploss")?.value);
+      if (sl > 0) body.stop_loss = sl;
+      const tp = parseFloat(document.getElementById("dec-takeprofit")?.value);
+      if (tp > 0) body.take_profit = tp;
+      const conf = parseFloat(document.getElementById("dec-confidence")?.value);
+      if (conf >= 0 && conf <= 1) body.confidence = conf;
+      body.source = "manual";
+    }
     const r = await apiPost("/api/decisions", body);
     if (r.ok) {
       document.getElementById("dec-msg").textContent = "✓ 已保存";
       // Reset form
-      ["dec-title", "dec-context", "dec-action", "dec-outcome", "dec-tags"].forEach(id => {
+      ["dec-title", "dec-context", "dec-action", "dec-outcome", "dec-tags",
+       "dec-symbol", "dec-price", "dec-size", "dec-stoploss", "dec-takeprofit", "dec-confidence"
+      ].forEach(id => {
         const el = document.getElementById(id); if (el) el.value = "";
       });
+      const ta = document.getElementById("dec-trade-action");
+      if (ta) ta.selectedIndex = 0;
       document.getElementById("decision-form-wrap").removeAttribute("open");
       loadDecisions();
       setTimeout(() => { document.getElementById("dec-msg").textContent = ""; }, 2000);
     } else {
       document.getElementById("dec-msg").textContent = "✗ " + (r.error || "保存失败");
     }
+  });
+
+  // ── Type toggle: show/hide trade fields ──
+  document.getElementById("dec-type")?.addEventListener("change", e => {
+    const tf = document.getElementById("dec-trade-fields");
+    if (tf) tf.style.display = e.target.value === "trade" ? "" : "none";
   });
 
   // ── View toggle ──
@@ -2445,7 +2488,43 @@ updateAutoRefreshStatus();
   // ── Filter ──
   document.getElementById("dec-filter-type")?.addEventListener("change", () => loadDecisions());
 
+  // ── Analyze ──
+  document.getElementById("btn-dec-analyze")?.addEventListener("click", async () => {
+    const panel = document.getElementById("dec-analyze-panel");
+    if (!panel) return;
+    if (panel.style.display !== "none") { panel.style.display = "none"; return; }
+    panel.innerHTML = '<span style="color:var(--muted)">分析中…</span>';
+    panel.style.display = "";
+    const r = await apiFetch("/api/decisions/analyze?type=trade");
+    if (!r.ok) { panel.innerHTML = '<span style="color:var(--down)">分析失败</span>'; return; }
+    const sevColor = { danger: "var(--down)", warn: "#f0ad4e", info: "var(--muted)" };
+    const patternHTML = (r.patterns || []).map(p =>
+      `<div class="dec-pattern" style="border-left:3px solid ${sevColor[p.severity] || 'var(--muted)'}">
+        <span class="dec-pattern-label">${esc(p.label)}</span>
+      </div>`
+    ).join("") || '<div style="color:var(--muted)">暂无模式发现</div>';
+    panel.innerHTML = `
+      <div class="dec-analyze-stats">
+        <div class="dec-stat"><span class="dec-stat-num">${r.total}</span><span class="dec-stat-label">总决策</span></div>
+        <div class="dec-stat"><span class="dec-stat-num" style="color:var(--up)">${r.buys}</span><span class="dec-stat-label">买入</span></div>
+        <div class="dec-stat"><span class="dec-stat-num" style="color:var(--down)">${r.sells}</span><span class="dec-stat-label">卖出</span></div>
+        <div class="dec-stat"><span class="dec-stat-num">${r.holds}</span><span class="dec-stat-label">持有</span></div>
+        <div class="dec-stat"><span class="dec-stat-num">${(r.avg_confidence * 100).toFixed(0)}%</span><span class="dec-stat-label">平均信心</span></div>
+      </div>
+      <div class="dec-analyze-sources">
+        ${Object.entries(r.by_source || {}).map(([k, v]) =>
+          `<span class="dec-src-chip">${k}: ${v}</span>`
+        ).join("")}
+      </div>
+      <div class="dec-analyze-patterns">
+        <div style="font-weight:600;margin-bottom:6px">🔍 行为模式</div>
+        ${patternHTML}
+      </div>
+    `;
+  });
+
   // ── Boot ──
+  window._reloadDecisions = loadDecisions;
   loadDecisions();
 })();
 
@@ -2507,12 +2586,110 @@ async function loadXinguXinzhai() {
 }
 loadXinguXinzhai();  // boot once
 
-// ── Advisor Card ─────────────────────────────────────────────────────────────
+// ── Advisor Card (可解释AI决策面板) ─────────────────────────────────────────
 (function() {
   const btn = document.getElementById("btn-advisor-run");
   const body = document.getElementById("advisor-body");
   const status = document.getElementById("advisor-status");
   const selRisk = document.getElementById("advisor-risk-pref");
+
+  // ── Radar chart SVG (5 factors) ──
+  function renderRadarChart(factors) {
+    const size = 140, cx = size / 2, cy = size / 2, r = 52;
+    const n = factors.length;
+    if (n < 3) return "";
+
+    const angle = (i) => (Math.PI * 2 * i / n) - Math.PI / 2;
+    const pt = (i, scale) => {
+      const a = angle(i);
+      return [cx + r * scale * Math.cos(a), cy + r * scale * Math.sin(a)];
+    };
+
+    // Grid rings
+    let grid = "";
+    for (const s of [0.25, 0.5, 0.75, 1.0]) {
+      const pts = factors.map((_, i) => pt(i, s).join(",")).join(" ");
+      grid += `<polygon points="${pts}" fill="none" stroke="var(--border)" stroke-width="0.5" opacity="0.5"/>`;
+    }
+
+    // Axis lines + labels
+    let axes = "";
+    factors.forEach((f, i) => {
+      const [x, y] = pt(i, 1.0);
+      axes += `<line x1="${cx}" y1="${cy}" x2="${x}" y2="${y}" stroke="var(--border)" stroke-width="0.5" opacity="0.4"/>`;
+      const [lx, ly] = pt(i, 1.25);
+      axes += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle" fill="var(--muted)" font-size="9">${f.name}</text>`;
+    });
+
+    // Data polygon: score -2..+2 → 0..1
+    const dataPts = factors.map((f, i) => {
+      const norm = (f.score + 2) / 4; // -2→0, 0→0.5, +2→1
+      return pt(i, Math.max(norm, 0.05)).join(",");
+    }).join(" ");
+
+    // Color: aggregate score
+    const avg = factors.reduce((s, f) => s + f.score, 0) / n;
+    const fill = avg > 0.5 ? "var(--up)" : avg < -0.5 ? "var(--down)" : "var(--muted)";
+
+    return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" class="advisor-radar">
+      ${grid}${axes}
+      <polygon points="${dataPts}" fill="${fill}" fill-opacity="0.2" stroke="${fill}" stroke-width="1.5"/>
+    </svg>`;
+  }
+
+  // ── Factor bar row ──
+  function renderFactorBar(f) {
+    // score: -2..+2 → bar position in 0..100%, center at 50%
+    const pct = ((f.score + 2) / 4) * 100;
+    const barCls = f.score > 0 ? "factor-pos" : f.score < 0 ? "factor-neg" : "factor-neu";
+    const scoreLabel = f.score > 0 ? `+${f.score}` : `${f.score}`;
+    return `<div class="factor-row">
+      <span class="factor-name">${f.name}</span>
+      <div class="factor-track">
+        <div class="factor-center"></div>
+        <div class="factor-fill ${barCls}" style="width:${pct}%"></div>
+      </div>
+      <span class="factor-score ${barCls}">${scoreLabel}</span>
+      <span class="factor-detail" title="${f.detail}">${f.detail}</span>
+    </div>`;
+  }
+
+  // ── Save signal to decision journal ──
+  async function saveToJournal(sig, riskPref, portfolioAction) {
+    // Find position data from localStorage for price/size
+    const posMap = JSON.parse(localStorage.getItem("positions_v1") || "{}");
+    const pos = posMap[sig.ticker] || {};
+    try {
+      const res = await fetch("/api/advisor/save-decision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticker: sig.ticker,
+          name: sig.name,
+          action: sig.action,
+          reasons: sig.reasons,
+          factors: sig.factors || [],
+          risk_pref: riskPref,
+          portfolio_action: portfolioAction,
+          price: pos.cost || 0,
+          size: pos.shares || 0,
+          stop_loss: sig.stop_loss || null,
+          take_profit: sig.take_profit || null,
+          strength: sig.strength || 1,
+        })
+      });
+      const d = await res.json();
+      if (d.ok) {
+        alert(`✓ 已记录到决策日志`);
+        // Reload decision journal if the IIFE exposed a reload
+        if (typeof window._reloadDecisions === "function") window._reloadDecisions();
+      } else {
+        alert("保存失败: " + (d.error || "未知错误"));
+      }
+    } catch (e) {
+      alert("网络错误");
+    }
+  }
 
   async function loadAdvisor() {
     // Build positions array from localStorage
@@ -2543,43 +2720,81 @@ loadXinguXinzhai();  // boot once
 
       let html = '';
 
-      // Portfolio-level action
-      const pa = data.portfolio_action || "observe";
-      const paLabel = { reduce: "⚠️ 建议减仓", add: "✅ 可加仓", observe: "👀 观望" };
-      html += `<div class="advisor-portfolio">`;
-      html += `<div class="advisor-portfolio-action ${pa}">${paLabel[pa] || pa}</div>`;
-      html += `<div>${data.portfolio_reason || ""}</div>`;
+      // ── Portfolio-level action banner ──
+      const pa = data.portfolio_action || "观望";
+      const paCls = pa === "加仓" ? "pa-add" : pa === "减仓" ? "pa-reduce" : pa === "清仓避险" ? "pa-danger" : "pa-hold";
+      html += `<div class="advisor-portfolio ${paCls}">`;
+      html += `<div class="advisor-portfolio-action">${pa}</div>`;
+      html += `<div class="advisor-portfolio-reason">${data.portfolio_reason || ""}</div>`;
       const ctx = data.context || {};
-      html += `<div class="advisor-ctx">市场: ${ctx.regime || "—"} | 情绪: ${ctx.sentiment_stage || "—"} | 信心: ${ctx.confidence ?? "—"}%</div>`;
-      html += `</div>`;
+      html += `<div class="advisor-ctx">`;
+      html += `<span class="advisor-ctx-chip">市场 <b>${ctx.regime || "—"}</b></span>`;
+      html += `<span class="advisor-ctx-chip">情绪 <b>${ctx.sentiment_stage || "—"}</b></span>`;
+      html += `<span class="advisor-ctx-chip">信心 <b>${ctx.confidence ?? "—"}%</b></span>`;
+      html += `<span class="advisor-ctx-chip">策略 <b>${data.strategy || "—"}</b></span>`;
+      html += `</div></div>`;
 
-      // Per-stock signals
+      // ── Per-stock explainable signals ──
       if (data.signals && data.signals.length > 0) {
         html += '<div class="advisor-signals">';
         for (const sig of data.signals) {
           const ac = sig.action || "hold";
+          const acLabel = {buy:"买入",sell:"卖出",hold:"持有",reduce:"减仓",add:"加仓"}[ac] || ac;
+          const acCls = ac === "sell" || ac === "reduce" ? "ac-sell" : ac === "buy" || ac === "add" ? "ac-buy" : "ac-hold";
           const bars = "█".repeat(sig.strength || 1) + "░".repeat(5 - (sig.strength || 1));
+
           html += `<div class="advisor-signal">`;
+          // Header: ticker + action badge + strength
           html += `<div class="advisor-signal-head">`;
           html += `<span class="advisor-signal-name">${sig.name || sig.ticker}</span>`;
-          html += `<span class="advisor-signal-action ${ac}">${ac.toUpperCase()}</span>`;
+          html += `<span class="advisor-signal-action ${acCls}">${acLabel}</span>`;
           html += `<span class="advisor-signal-strength">${bars}</span>`;
           html += `</div>`;
-          if (sig.reasons && sig.reasons.length) {
-            html += `<div class="advisor-signal-reasons">${sig.reasons.join("；")}</div>`;
+
+          // Radar + Factor bars side by side
+          const factors = sig.factors || [];
+          if (factors.length > 0) {
+            html += `<div class="advisor-explain">`;
+            html += `<div class="advisor-radar-wrap">${renderRadarChart(factors)}</div>`;
+            html += `<div class="advisor-factors">${factors.map(renderFactorBar).join("")}</div>`;
+            html += `</div>`;
           }
+
+          // Reasons
+          if (sig.reasons && sig.reasons.length) {
+            html += `<div class="advisor-signal-reasons">`;
+            sig.reasons.forEach(r => {
+              html += `<span class="advisor-reason-chip">${r}</span>`;
+            });
+            html += `</div>`;
+          }
+
+          // Stop/Take-profit + Save button
+          html += `<div class="advisor-signal-footer">`;
           if (sig.stop_loss || sig.take_profit) {
             const parts = [];
             if (sig.stop_loss) parts.push(`止损 ¥${sig.stop_loss.toFixed(2)}`);
             if (sig.take_profit) parts.push(`止盈 ¥${sig.take_profit.toFixed(2)}`);
-            html += `<div class="advisor-signal-prices">${parts.join(" | ")}</div>`;
+            html += `<span class="advisor-signal-prices">${parts.join(" | ")}</span>`;
           }
+          html += `<button class="advisor-save-btn" data-sig='${JSON.stringify({ticker:sig.ticker,name:sig.name,action:sig.action,reasons:sig.reasons,factors:sig.factors||[]})}'>📋 记录决策</button>`;
+          html += `</div>`;
+
           html += `</div>`;
         }
         html += '</div>';
       }
 
       body.innerHTML = html;
+
+      // Bind save buttons
+      body.querySelectorAll(".advisor-save-btn").forEach(b => {
+        b.addEventListener("click", () => {
+          const sig = JSON.parse(b.dataset.sig);
+          saveToJournal(sig, riskPref, data.portfolio_action);
+        });
+      });
+
       status.textContent = data.generated_at ? `更新: ${data.generated_at.slice(11, 16)}` : "";
     } catch (e) {
       body.innerHTML = '<div class="advisor-empty">请求失败，请稍后重试</div>';

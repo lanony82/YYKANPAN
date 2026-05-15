@@ -1,4 +1,96 @@
-# 🚀 YYKANPAN（看盘）— A股短线交易助手 V3
+# 🚀 YYKANPAN（看盘）— A股决策追踪系统 V3
+
+## YYKANPAN 是什么？
+
+YYKANPAN **不是交易系统，是决策追踪系统**。
+
+大多数散户亏钱不是因为策略差，而是因为：
+- **决策不一致** — 同样的信号，今天做明天不做
+- **情绪化交易** — FOMO 追涨、恐慌割肉
+- **缺少反馈闭环** — 做完就忘，没有复盘
+
+YYKANPAN 的核心理念：
+
+> **人类决策 → 结构化记录 → 行为分析 → 反向优化人**
+
+### 核心概念：Everything is a Decision
+
+```python
+Decision(
+    action="BUY",
+    symbol="晶合集成",
+    price=33.7,
+    size=1000,
+    reason="突破压力位追涨",
+    confidence=0.6,
+    stop_loss=31.5,
+    take_profit=37.0,
+    source="manual"       # manual / rule / ai
+)
+```
+
+每一笔操作都是一个 Decision —— 不管是你自己判断（manual）、规则引擎建议（rule）、还是 AI 生成（ai），统一结构、统一追踪、统一复盘。
+
+### 三层抽象
+
+| 层 | 字段 | 现在做什么 | 未来能做什么 |
+|----|------|-----------|-------------|
+| **Action** | BUY / SELL / HOLD | 记录操作 | 对接券商 API、自动交易 |
+| **Reason** | "跌破支撑位止损" | 人类可读理由 | AI 学习决策风格、发现错误模式 |
+| **Context** | regime/sentiment/volume | 环境快照 | AI 复盘、自动打标签、找"亏钱模式" |
+
+### 示例
+
+**输入：** 持仓 600519.SS（贵州茅台），1000股，成本 1700
+
+```
+curl "http://localhost:5000/api/advisor?positions=[{%22ticker%22:%22600519.SS%22,%22shares%22:1000,%22cost%22:1700}]"
+```
+
+**输出（含可解释因子）：**
+
+```json
+{
+  "action": "hold",
+  "strength": 1,
+  "reasons": ["RSI 65.2 — 中性区间", "价格位于布林中轨附近"],
+  "factors": [
+    {"name": "盈亏", "score": 1, "weight": 0.30, "detail": "浮盈 5%"},
+    {"name": "风险", "score": 0, "weight": 0.25, "detail": "无风险事件"},
+    {"name": "情绪", "score": 0, "weight": 0.20, "detail": "情绪: 分歧"}
+  ],
+  "stop_loss": 1530.0,
+  "take_profit": 2125.0,
+  "portfolio_action": "观望"
+}
+```
+
+**一键记录决策：**
+
+```
+curl -X POST http://localhost:5000/api/advisor/save-decision \
+  -H "Content-Type: application/json" \
+  -d '{"ticker":"600519.SS","name":"贵州茅台","action":"hold","price":1785,"size":1000,"strength":1}'
+```
+
+**分析决策模式：**
+
+```
+curl http://localhost:5000/api/decisions/analyze
+```
+
+→ 输出：低信心决策占比、无止损买入次数、AI vs 人工决策比例、过度交易预警
+
+### 如何运行
+
+```powershell
+pip install -r requirements.txt
+python src/server.py
+```
+
+打开 http://127.0.0.1:5000 — 35 个 API 端点、14 张看板卡片、250+ 项测试覆盖。
+
+---
 
 > 决策辅助系统：帮你判断"今天能不能做"、"资金在去哪里"、"别冲动"
 
@@ -17,8 +109,8 @@
 | **Watchdog** | 交通灯 🔴🟡🟢 + 情绪变化推送 | 规则引擎 |
 | **技术信号** | MA/MACD/RSI/KDJ/布林 指标 + 买卖信号 | Sina K线 |
 | **选股策略** | 金叉/放量突破/超跌反弹/涨停接力 | 沪深300+涨停池 |
-| **参谋系统** | 持仓评估 + 止盈止损 + 组合建议 | 规则引擎 |
-| **决策日志** | 交易/生活/工作决策记录 + 回顾 | 本地JSON |
+| **参谋系统** | 可解释AI决策面板 + 5因子雷达图 + 止盈止损 | 规则引擎 |
+| **决策日志** | 结构化决策记录(BUY/SELL/HOLD) + 行为分析 + 模式挖掘 | 本地JSON |
 | **新股新债** | IPO/可转债 申购日历 | AkShare |
 | **AI策略** | 偏多/偏空/震荡 + 关注/风险标的 | 规则引擎 |
 | **数据源管理** | 自动测速/手动切换数据源优先级 | Sina/AkShare/Yahoo |
@@ -78,13 +170,13 @@ tests/
   test_advisor.py         参谋系统（25项）
   test_analysis.py        分析引擎（21项）
   test_config.py          配置模块（4项）
-  test_decision.py        决策日志（24项）
+  test_decision.py        决策日志（53项）
   test_new_features.py    新功能集成（33项）
   test_providers.py       数据源层（22项）
   test_screener.py        选股策略（23项）
   test_sentiment.py       情绪引擎（10项）
   test_server_csv.py      CSV 持久化（11项）
-  test_server_trading.py  交易时段逻辑（16项）
+  test_server_trading.py  交易时段逻辑（27项）
   test_time_utils.py      时间工具（5项）
   test_watchlist.py       自选股 CRUD（13项）
   test_xgxz.py            新股新债（11项）
@@ -120,7 +212,10 @@ tests/
 | `/api/screener` | GET | 执行选股 | — |
 | `/api/xingu-xinzhai` | GET | 新股新债日历 | — |
 | `/api/decisions` | GET/POST/PUT/DELETE | 决策日志 CRUD | — |
-| `/api/advisor` | GET | 参谋系统 | — |
+| `/api/decisions/evaluate/<id>` | POST | 评估单笔决策（P&L + 风控） | — |
+| `/api/decisions/analyze` | GET | 决策行为分析（模式挖掘） | — |
+| `/api/advisor` | GET | AI决策面板（可解释因子） | — |
+| `/api/advisor/save-decision` | POST | AI建议→决策日志 | — |
 | `/api/macro-history/<symbol>` | GET | 宏观指标历史 | — |
 | `/api/providers/test` | POST | 测试所有数据源速度 | — |
 | `/api/providers/order` | GET/POST | 获取/设置数据源优先级 | — |
@@ -170,7 +265,7 @@ python src/collect_stocks.py          # 手动
 ## 测试
 
 ```powershell
-python -m pytest tests/                # 225 项全量测试
+python -m pytest tests/                # 275 项全量测试
 python -m pytest tests/ -x --tb=short  # 遇错即停
 python -m pytest tests/smoke_test.py   # 仅集成烟测（7项）
 ```
@@ -209,7 +304,7 @@ Run a quick end-to-end smoke test (local API + key endpoint contracts):
 python -m pytest tests/smoke_test.py
 ```
 
-Or run the full suite (225 tests):
+Or run the full suite (275 tests):
 
 ```powershell
 python -m pytest tests/ --tb=short

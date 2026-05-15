@@ -235,9 +235,9 @@
     </div>
   </div>
 
-  <!-- Advisor Card -->
+  <!-- Advisor Card (可解释AI决策面板) -->
   <div class="insight-card" data-card-id="advisor" draggable="true">
-    <h3><span class="drag-handle">⠇</span> 参谋信号 <span class="ai-badge" style="background:rgba(103,58,183,.15);color:#7c4dff">Advisor</span><button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
+    <h3><span class="drag-handle">⠇</span> AI决策面板 <span class="ai-badge" style="background:rgba(103,58,183,.15);color:#7c4dff">Explainable</span><button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
     <div class="advisor-controls">
       <select id="advisor-risk-pref" title="风险偏好">
         <option value="conservative">保守</option>
@@ -346,6 +346,27 @@
             <option value="reviewed">📝 已复盘</option>
           </select>
         </div>
+        <!-- Trade-specific fields -->
+        <div id="dec-trade-fields" class="dec-trade-fields">
+          <div class="dec-row">
+            <select id="dec-trade-action">
+              <option value="">操作…</option>
+              <option value="BUY">买入 BUY</option>
+              <option value="SELL">卖出 SELL</option>
+              <option value="HOLD">持有 HOLD</option>
+            </select>
+            <input id="dec-symbol" type="text" placeholder="标的名称" />
+          </div>
+          <div class="dec-row">
+            <input id="dec-price" type="number" step="0.01" placeholder="价格" />
+            <input id="dec-size" type="number" step="100" placeholder="股数" />
+          </div>
+          <div class="dec-row">
+            <input id="dec-stoploss" type="number" step="0.01" placeholder="止损价" />
+            <input id="dec-takeprofit" type="number" step="0.01" placeholder="止盈价" />
+            <input id="dec-confidence" type="number" step="0.1" min="0" max="1" placeholder="信心 0~1" />
+          </div>
+        </div>
         <textarea id="dec-context" placeholder="当时环境（价格/市场/情绪）" rows="2"></textarea>
         <textarea id="dec-action" placeholder="做了什么 / 打算做什么" rows="2"></textarea>
         <textarea id="dec-outcome" placeholder="结果（可后续补充）" rows="2"></textarea>
@@ -370,7 +391,11 @@
         <button class="dec-view-btn" data-view="list" title="列表视图">☰</button>
       </div>
       <span id="dec-total" class="dec-total"></span>
+      <button id="btn-dec-analyze" class="dec-analyze-btn" title="决策分析">📊 分析</button>
     </div>
+
+    <!-- Analyze panel (hidden by default) -->
+    <div id="dec-analyze-panel" class="dec-analyze-panel" style="display:none"></div>
 
     <!-- Kanban board -->
     <div id="dec-kanban" class="dec-kanban">

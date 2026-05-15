@@ -251,23 +251,65 @@
 
 ---
 
-## 12. `advisor` — 参谋信号 (Trading Advisor)
+## 12. `advisor` — AI决策面板 (Explainable AI Decision Panel)
 
 | Field | Value |
 |-------|-------|
 | API | `GET /api/advisor?risk_pref=balanced&positions=[...]` |
-| Backend | `adv.evaluate_portfolio()` from `src/advisor.py` |
-| Refresh | Manual button click |
-| Badge | Advisor |
+| Save | `POST /api/advisor/save-decision` |
+| Backend | `adv.evaluate_portfolio()` from `src/analysis/advisor.py` |
+| Refresh | Manual "🧠 评估" button |
+| Badge | Explainable |
 
 **See:** [docs/advisor-spec.md](advisor-spec.md) for full strategy spec.
+
+**Features:**
+- **Portfolio action banner** — color-coded (加仓/减仓/观望/清仓避险)
+- **Radar chart** — 5-axis SVG showing factor scores per stock
+- **Factor bar rows** — per-factor score (-2..+2) with progress bar + detail
+- **Reason chips** — all contributing reasons displayed as tag chips
+- **Save to journal** — one-click "📋 记录决策" creates a decision journal entry
+
+**Factors** (5 axes, weights sum to 1.0):
+
+| Factor | Weight | Range | Description |
+|--------|--------|-------|-------------|
+| 盈亏 | 0.30 | -2..+2 | P&L vs stop-loss / take-profit |
+| 价位 | 0.15 | -2..+2 | 52-week high/low proximity |
+| 风险 | 0.25 | -2..+2 | Black swan / grey rhino events |
+| 情绪 | 0.20 | -2..+2 | Market sentiment stage |
+| 趋势 | 0.10 | -2..+2 | Market regime + AI confidence |
+
+**Data flow:**
+```
+localStorage(positions) → /api/advisor → evaluate_portfolio()
+    ├── P&L factor (cost vs price)
+    ├── 52-week factor (high52/low52)
+    ├── Risk factor (risk_events from server)
+    ├── Sentiment factor (sentiment_history from server)
+    └── Regime factor (auto-brief regime + ai-edge confidence)
+         ↓
+    Signal + Factors → render radar + bars
+         ↓
+    "📋 记录决策" → POST /api/advisor/save-decision → decision journal
+```
 
 **Response:**
 ```json
 {
   "ok": true, "generated_at": "...", "strategy": "rule_v1",
-  "portfolio_action": "observe", "portfolio_reason": "...",
-  "signals": [{"ticker": "...", "name": "...", "action": "hold", "strength": 1, "reasons": [...], "stop_loss": null, "take_profit": null}],
+  "portfolio_action": "观望", "portfolio_reason": "...",
+  "signals": [{
+    "ticker": "...", "name": "...", "action": "hold", "strength": 1,
+    "reasons": [...], "stop_loss": null, "take_profit": null,
+    "factors": [
+      {"name": "盈亏", "score": 1, "weight": 0.30, "detail": "浮盈 5%"},
+      {"name": "价位", "score": 0, "weight": 0.15, "detail": "52周区间 60% 位置"},
+      {"name": "风险", "score": 0, "weight": 0.25, "detail": "无风险事件"},
+      {"name": "情绪", "score": 0, "weight": 0.20, "detail": "情绪: 分歧"},
+      {"name": "趋势", "score": 0, "weight": 0.10, "detail": "市场: 震荡，信心: 50%"}
+    ]
+  }],
   "context": {"regime": "震荡", "sentiment_stage": "分歧", "confidence": 65}
 }
 ```

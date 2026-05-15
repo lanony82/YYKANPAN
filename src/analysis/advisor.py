@@ -51,6 +51,8 @@ class Signal:
     reasons: list[str] = field(default_factory=list)
     stop_loss: float | None = None
     take_profit: float | None = None
+    factors: list[dict] = field(default_factory=list)
+    # Each factor: {"name": str, "score": int(-2..+2), "weight": float, "detail": str}
 
 
 @dataclass
@@ -99,6 +101,7 @@ class RuleBasedStrategy:
         self, pos: PositionInput, ctx: MarketContext, risk_pref: str
     ) -> Signal:
         reasons: list[str] = []
+        factors: list[dict] = []
         best_action = "hold"
         best_strength = 1
 
@@ -111,7 +114,9 @@ class RuleBasedStrategy:
 
         th = _get_thresholds(risk_pref)
 
-        # ── P&L rules (only if cost > 0) ──
+        # ── Factor 1: P&L (盈亏因子) ──
+        pnl_score = 0
+        pnl_detail = "无持仓成本"
         if pos.cost > 0:
             pnl_pct = (pos.price - pos.cost) / pos.cost
 
@@ -120,42 +125,102 @@ class RuleBasedStrategy:
                 r = f"浮亏 {pnl_pct*100:.1f}%，触及止损线 {th['stop_loss']*100:.0f}%"
                 reasons.append(r)
                 best_action, best_strength = "sell", 5
-
+                pnl_score = -2
+                pnl_detail = r
             # Take-profit
             elif pnl_pct >= th["take_profit"]:
                 r = f"浮盈 {pnl_pct*100:.1f}%，达到止盈线 {th['take_profit']*100:.0f}%"
                 reasons.append(r)
                 if best_strength < 3:
                     best_action, best_strength = "reduce", 3
+                pnl_score = 2
+                pnl_detail = r
+            elif pnl_pct > 0:
+                pnl_score = 1
+                pnl_detail = f"浮盈 {pnl_pct*100:.1f}%"
+            elif pnl_pct < 0:
+                pnl_score = -1
+                pnl_detail = f"浮亏 {pnl_pct*100:.1f}%"
+            else:
+                pnl_detail = "持平"
+        factors.append({"name": "盈亏", "score": pnl_score, "weight": 0.30, "detail": pnl_detail})
 
-        # ── 52-week rules ──
+        # ── Factor 2: 52-week position (价位因子) ──
+        pos_score = 0
+        pos_detail = "无52周数据"
         if pos.high52 and pos.price >= pos.high52 * 0.97:
             reasons.append(f"接近52周高点 {pos.high52:.2f}")
             if best_strength < 2:
                 best_action, best_strength = "reduce", 2
+            pos_score = -1
+            pos_detail = f"接近52周高点 {pos.high52:.2f}"
 
         if pos.low52 and pos.price <= pos.low52 * 1.03:
             if ctx.regime != "偏弱":
                 reasons.append(f"接近52周低点 {pos.low52:.2f}，市场非弱势")
                 if best_strength < 2:
                     best_action, best_strength = "add", 2
+                pos_score = 1
+                pos_detail = f"接近52周低点，市场非弱势"
             else:
                 reasons.append(f"接近52周低点但市场偏弱，不宜抄底")
+                pos_score = -1
+                pos_detail = f"接近52周低点但市场偏弱"
 
-        # ── Black-swan rule ──
+        if pos_score == 0 and pos.high52 and pos.low52 and pos.high52 > pos.low52:
+            range52 = pos.high52 - pos.low52
+            pct_in_range = (pos.price - pos.low52) / range52
+            pos_detail = f"52周区间 {pct_in_range*100:.0f}% 位置"
+        factors.append({"name": "价位", "score": pos_score, "weight": 0.15, "detail": pos_detail})
+
+        # ── Factor 3: Risk events (风险因子) ──
+        risk_score = 0
+        risk_detail = "无风险事件"
         has_black_swan = any(
             e.get("severity") == "high" for e in ctx.risk_events
+        )
+        has_grey_rhino = any(
+            e.get("severity") == "medium" for e in ctx.risk_events
         )
         if has_black_swan:
             reasons.append("检测到黑天鹅事件，建议避险")
             if best_strength < 4:
                 best_action, best_strength = "sell", 4
+            risk_score = -2
+            risk_detail = "黑天鹅事件"
+        elif has_grey_rhino:
+            risk_score = -1
+            risk_detail = "灰犀牛事件"
+        factors.append({"name": "风险", "score": risk_score, "weight": 0.25, "detail": risk_detail})
 
-        # ── Sentiment ebb-tide rule ──
+        # ── Factor 4: Sentiment (情绪因子) ──
+        sent_score = 0
+        sent_detail = f"情绪: {ctx.sentiment_stage}"
         if ctx.sentiment_stage == "退潮" and not ctx.tradable:
             reasons.append("市场退潮期，暂不适合加仓")
             if best_strength < 3 and best_action in ("hold", "add", "buy"):
                 best_action, best_strength = "hold", 3
+            sent_score = -2
+            sent_detail = "退潮期，不适合交易"
+        elif ctx.sentiment_stage == "上升":
+            sent_score = 2
+            sent_detail = "上升期，适合交易"
+        elif ctx.sentiment_stage == "高潮":
+            sent_score = 1
+            sent_detail = "高潮期，注意见顶信号"
+        elif ctx.sentiment_stage == "分歧":
+            sent_score = 0
+            sent_detail = "分歧期，方向不明"
+        factors.append({"name": "情绪", "score": sent_score, "weight": 0.20, "detail": sent_detail})
+
+        # ── Factor 5: Market regime (趋势因子) ──
+        regime_score = 0
+        if ctx.regime == "偏强":
+            regime_score = 1
+        elif ctx.regime == "偏弱":
+            regime_score = -1
+        regime_detail = f"市场: {ctx.regime}，信心: {ctx.confidence:.0f}%"
+        factors.append({"name": "趋势", "score": regime_score, "weight": 0.10, "detail": regime_detail})
 
         # ── Stop-loss / take-profit price suggestions ──
         stop_loss = None
@@ -175,6 +240,7 @@ class RuleBasedStrategy:
             reasons=reasons,
             stop_loss=stop_loss,
             take_profit=take_profit,
+            factors=factors,
         )
 
 
