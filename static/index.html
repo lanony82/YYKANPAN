@@ -101,14 +101,13 @@
   </div>
 
   <div class="insight-card" data-card-id="macro" draggable="true">
-    <h3><span class="drag-handle">⠿</span> 宏观风向标
-      <span class="macro-period-tabs" id="macro-period-tabs">
-        <button class="macro-period-btn" data-days="5">1W</button>
-        <button class="macro-period-btn active" data-days="20">1M</button>
-        <button class="macro-period-btn" data-days="60">3M</button>
-        <button class="macro-period-btn" data-days="250">1Y</button>
-      </span>
-      <button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
+    <h3><span class="drag-handle">⠿</span> 宏观风向标<button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
+    <span class="macro-period-tabs" id="macro-period-tabs">
+      <button class="macro-period-btn" data-days="5">1W</button>
+      <button class="macro-period-btn active" data-days="20">1M</button>
+      <button class="macro-period-btn" data-days="60">3M</button>
+      <button class="macro-period-btn" data-days="250">1Y</button>
+    </span>
     <div class="macro-bar" id="macro-bar">
       <span class="macro-loading">加载中…</span>
     </div>
@@ -321,6 +320,50 @@
     </div>
     <div id="screener-results" class="screener-results card-scroll-x scroll-hint">
       <div class="screener-empty">选择策略后点击「扫描」</div>
+    </div>
+  </div>
+
+  <!-- AutoDev Card -->
+  <div class="insight-card" data-card-id="autodev" draggable="true">
+    <h3><span class="drag-handle">⠇</span> 自动参谋 <span class="ai-badge" style="background:rgba(0,200,83,.15);color:#00c853">AutoDev</span><button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
+    <div class="autodev-controls">
+      <label class="autodev-label" title="评分模型：决定5个因子(盈亏/价位/风险/情绪/趋势)的权重分配">📊 评分
+      <select id="autodev-strategy">
+        <option value="rule_v1">均衡（各因子平衡）</option>
+        <option value="conservative">保守（重风控轻进攻）</option>
+        <option value="dividend">分红（守息为主）</option>
+      </select></label>
+      <label class="autodev-label" title="风控档位：决定止损/止盈线的宽松程度">🛡️ 风控
+      <select id="autodev-risk">
+        <option value="conservative">保守（止损5-7%）</option>
+        <option value="balanced" selected>均衡（止损7-10%）</option>
+        <option value="aggressive">激进（止损10-15%）</option>
+      </select></label>
+      <button id="btn-autodev-run">🤖 一键运行</button>
+      <span id="autodev-status" class="autodev-status"></span>
+    </div>
+    <div id="autodev-picks" class="autodev-picks" style="display:none"></div>
+    <div id="autodev-body" class="autodev-body">
+      <div class="autodev-empty">设置持仓后点击「一键运行」— 自动采集行情/情绪/风险，运行5步循环</div>
+    </div>
+  </div>
+
+  <!-- 分红策略 Card -->
+  <div class="insight-card" data-card-id="dividend" draggable="true">
+    <h3><span class="drag-handle">⠇</span> 分红策略 <span class="ai-badge" style="background:rgba(255,217,61,.15);color:#ffd93d">守息为主</span><button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
+    <div class="dividend-controls">
+      <label class="autodev-label" title="风控档位">🛡️ 风控
+      <select id="dividend-risk">
+        <option value="conservative">保守（止损5%）</option>
+        <option value="balanced" selected>均衡（止损8%）</option>
+        <option value="aggressive">激进（止损12%）</option>
+      </select></label>
+      <button id="btn-dividend-run">🤖 运行分红循环</button>
+      <span id="dividend-status" class="autodev-status"></span>
+    </div>
+    <div id="dividend-picks" class="autodev-picks"></div>
+    <div id="dividend-body" class="autodev-body">
+      <div class="autodev-empty">加载中…</div>
     </div>
   </div>
 

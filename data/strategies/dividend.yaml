@@ -1,0 +1,83 @@
+# dividend — 分红策略
+# 适合高股息长持仓位：重盈亏保护，轻短线情绪/趋势
+# 特点：止损紧（保护分红收益）、止盈宽（长持不轻易卖出）
+
+name: dividend_v1
+version: 1
+description: "分红策略 — 守息为主，波段为辅"
+
+risk_profiles:
+  conservative:
+    stop_loss: 0.05
+    take_profit: 0.20
+  balanced:
+    stop_loss: 0.08
+    take_profit: 0.30
+  aggressive:
+    stop_loss: 0.12
+    take_profit: 0.50
+
+factors:
+  - name: 盈亏
+    weight: 0.35
+    evaluator: pnl
+  - name: 价位
+    weight: 0.20
+    evaluator: week52
+  - name: 风险
+    weight: 0.30
+    evaluator: risk
+  - name: 情绪
+    weight: 0.10
+    evaluator: sentiment
+  - name: 趋势
+    weight: 0.05
+    evaluator: regime
+
+portfolio:
+  black_swan_action: "清仓避险"
+  sell_majority_pct: 0.5
+  sell_majority_action: "减仓"
+  add_sentiment: "上升"
+  add_min_confidence: 60
+  add_action: "加仓"
+  default_action: "观望"
+
+# ── 分红标的池（3-5只） ──────────────────────────────────────────────────────
+# 用户可自行修改。entry = 理想买点, position = 建议仓位占比(合计100%)
+picks:
+  - ticker: "601288.SS"
+    name: "农业银行"
+    dividend_yield: 0.065
+    entry: 4.80
+    position: 0.25
+    held: false
+    note: "股息率6.5%+，国有大行确定性高"
+  - ticker: "600900.SS"
+    name: "长江电力"
+    dividend_yield: 0.038
+    entry: 28.50
+    position: 0.25
+    held: false
+    note: "现金流稳定，类债属性，回调即买"
+  - ticker: "000651.SZ"
+    name: "格力电器"
+    dividend_yield: 0.055
+    entry: 38.00
+    position: 0.20
+    held: false
+    note: "高分红+回购，注意空调周期"
+  - ticker: "601398.SS"
+    name: "工商银行"
+    dividend_yield: 0.060
+    entry: 6.20
+    position: 0.15
+    held: true
+    note: "宇宙行，底仓配置"
+  - ticker: "600036.SS"
+    name: "招商银行"
+    dividend_yield: 0.042
+    entry: 35.00
+    position: 0.15
+    held: false
+    note: "零售银行龙头，成长+分红兼顾"

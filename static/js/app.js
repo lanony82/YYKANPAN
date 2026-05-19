@@ -2106,6 +2106,7 @@ loadWatchdogConfig();
 
   function hideCard(id) {
     const card = wrap.querySelector(`.insight-card[data-card-id="${id}"]`);
+    if (card && card.classList.contains("pinned")) return;
     if (card) card.style.display = "none";
     const h = getHidden(); if (!h.includes(id)) { h.push(id); setHidden(h); }
     renderBar();
@@ -2242,6 +2243,55 @@ loadWatchdogConfig();
     if (card) card.style.display = "none";
   });
   renderBar();
+
+  // ── Card pin (prevent drag & close) ──────────────────────────────────
+  const LOCK_KEY = "card_locked_v1";
+  function getLocked() { try { return JSON.parse(localStorage.getItem(LOCK_KEY)) || []; } catch { return []; } }
+  function setLocked(arr) { localStorage.setItem(LOCK_KEY, JSON.stringify(arr)); }
+
+  wrap.querySelectorAll(".insight-card[data-card-id]").forEach(card => {
+    const h3 = card.querySelector("h3");
+    if (!h3) return;
+    const collapseBtn = h3.querySelector(".card-collapse");
+    const closeBtn = h3.querySelector(".card-close");
+
+    // Wrap all 3 buttons in a group container
+    const group = document.createElement("span");
+    group.className = "card-btn-group";
+
+    const pinBtn = document.createElement("button");
+    pinBtn.className = "card-pin";
+    pinBtn.title = "固定位置";
+    pinBtn.textContent = "◇";
+    group.appendChild(pinBtn);
+
+    if (collapseBtn) { group.appendChild(collapseBtn); }
+    if (closeBtn) { group.appendChild(closeBtn); }
+    h3.appendChild(group);
+
+    pinBtn.addEventListener("click", () => {
+      const id = card.dataset.cardId;
+      const isPinned = card.classList.toggle("pinned");
+      pinBtn.textContent = isPinned ? "◆" : "◇";
+      pinBtn.title = isPinned ? "取消固定" : "固定位置";
+      card.setAttribute("draggable", isPinned ? "false" : "true");
+      let arr = getLocked();
+      if (isPinned && !arr.includes(id)) arr.push(id);
+      else arr = arr.filter(x => x !== id);
+      setLocked(arr);
+    });
+  });
+
+  // Restore pinned state
+  getLocked().forEach(id => {
+    const card = wrap.querySelector(`.insight-card[data-card-id="${id}"]`);
+    if (card) {
+      card.classList.add("pinned");
+      card.setAttribute("draggable", "false");
+      const btn = card.querySelector(".card-pin");
+      if (btn) { btn.textContent = "◆"; btn.title = "取消固定"; }
+    }
+  });
 })();
 
 // ── Column layout selector ─────────────────────────────────────────────────────────
@@ -2495,7 +2545,8 @@ updateAutoRefreshStatus();
     if (panel.style.display !== "none") { panel.style.display = "none"; return; }
     panel.innerHTML = '<span style="color:var(--muted)">分析中…</span>';
     panel.style.display = "";
-    const r = await apiFetch("/api/decisions/analyze?type=trade");
+    const resp = await fetch("/api/decisions/analyze?type=trade");
+    const r = await resp.json();
     if (!r.ok) { panel.innerHTML = '<span style="color:var(--down)">分析失败</span>'; return; }
     const sevColor = { danger: "var(--down)", warn: "#f0ad4e", info: "var(--muted)" };
     const patternHTML = (r.patterns || []).map(p =>
@@ -2739,8 +2790,8 @@ loadXinguXinzhai();  // boot once
         html += '<div class="advisor-signals">';
         for (const sig of data.signals) {
           const ac = sig.action || "hold";
-          const acLabel = {buy:"买入",sell:"卖出",hold:"持有",reduce:"减仓",add:"加仓"}[ac] || ac;
-          const acCls = ac === "sell" || ac === "reduce" ? "ac-sell" : ac === "buy" || ac === "add" ? "ac-buy" : "ac-hold";
+          const acLabel = {buy:"买入",sell:"卖出",hold:"持有",reduce:"减仓",add:"加仓",watch:"观望"}[ac] || ac;
+          const acCls = ac === "sell" || ac === "reduce" ? "ac-sell" : ac === "buy" || ac === "add" ? "ac-buy" : ac === "watch" ? "ac-watch" : "ac-hold";
           const bars = "█".repeat(sig.strength || 1) + "░".repeat(5 - (sig.strength || 1));
 
           html += `<div class="advisor-signal">`;
@@ -2805,6 +2856,243 @@ loadXinguXinzhai();  // boot once
   }
 
   btn.addEventListener("click", loadAdvisor);
+})();
+
+// ── AutoDev Card (一键自动循环) ──────────────────────────────────────────────
+(function() {
+  const btn = document.getElementById("btn-autodev-run");
+  const body = document.getElementById("autodev-body");
+  const status = document.getElementById("autodev-status");
+  const selStrategy = document.getElementById("autodev-strategy");
+  const selRisk = document.getElementById("autodev-risk");
+  if (!btn) return;
+
+  async function runAutodev() {
+    // Build positions from localStorage (same as advisor)
+    const posMap = JSON.parse(localStorage.getItem("positions_v1") || "{}");
+    const posArr = Object.entries(posMap)
+      .filter(([, v]) => v && v.shares > 0 && v.cost > 0)
+      .map(([ticker, v]) => ({ ticker, shares: v.shares, cost: v.cost }));
+
+    if (posArr.length === 0) {
+      body.innerHTML = '<div class="autodev-empty">暂无持仓数据。请先在股票卡片中设置持仓和成本。</div>';
+      return;
+    }
+
+    status.textContent = "运行中…";
+    btn.disabled = true;
+
+    try {
+      const resp = await fetch("/api/autodev/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          positions: posArr,
+          strategy: selStrategy.value,
+          risk_pref: selRisk.value,
+        }),
+      });
+      const data = await resp.json();
+
+      if (!data.ok) {
+        body.innerHTML = `<div class="autodev-empty">${data.error || "运行失败"}</div>`;
+        status.textContent = "";
+        return;
+      }
+
+      let html = "";
+
+      // ── Cycle summary banner ──
+      const c = data.cycle || {};
+      const ds = data.data_sources || {};
+      html += `<div class="autodev-summary">`;
+      html += `<div class="autodev-summary-row">`;
+      html += `<span class="autodev-chip">策略 <b>${c.strategy || "—"}</b></span>`;
+      html += `<span class="autodev-chip">风控 <b>${c.risk_pref || "—"}</b></span>`;
+      html += `<span class="autodev-chip">市场 <b>${ds.regime || "—"}</b></span>`;
+      html += `<span class="autodev-chip">情绪 <b>${ds.sentiment_stage || "—"}</b></span>`;
+      html += `<span class="autodev-chip">风险 <b>${ds.risk_events_count || 0}</b>个</span>`;
+      html += `</div>`;
+      html += `<div class="autodev-pipeline">`;
+      const steps = [
+        { label: "观察", icon: "👁", count: c.positions_count ?? c.signals_count ?? "—" },
+        { label: "决策", icon: "🧠", count: c.signals_count ?? "—" },
+        { label: "执行", icon: "⚡", count: c.acted_count ?? 0 },
+        { label: "评估", icon: "📊", count: c.evaluations_count ?? 0 },
+        { label: "学习", icon: "💡", count: c.suggestions_count ?? 0 },
+      ];
+      steps.forEach((s, i) => {
+        html += `<span class="autodev-step">${s.icon} ${s.label} <b>${s.count}</b></span>`;
+        if (i < steps.length - 1) html += `<span class="autodev-arrow">→</span>`;
+      });
+      html += `</div></div>`;
+
+      // ── Signals ──
+      const signals = data.signals || [];
+      if (signals.length > 0) {
+        html += '<div class="autodev-signals">';
+        for (const sig of signals) {
+          const ac = sig.action || "hold";
+          const acLabel = {buy:"买入",sell:"卖出",hold:"持有",reduce:"减仓",add:"加仓",watch:"观望"}[ac] || ac;
+          const acCls = ac === "sell" || ac === "reduce" ? "ac-sell" : ac === "buy" || ac === "add" ? "ac-buy" : ac === "watch" ? "ac-watch" : "ac-hold";
+          const bars = "█".repeat(sig.strength || 1) + "░".repeat(5 - (sig.strength || 1));
+
+          html += `<div class="autodev-signal">`;
+          html += `<span class="autodev-sig-name">${sig.name || sig.ticker}</span>`;
+          html += `<span class="advisor-signal-action ${acCls}">${acLabel}</span>`;
+          html += `<span class="autodev-sig-strength">${bars}</span>`;
+          if (sig.reasons && sig.reasons.length) {
+            html += `<span class="autodev-sig-reasons">${sig.reasons.join("；")}</span>`;
+          }
+          html += `</div>`;
+        }
+        html += '</div>';
+      } else {
+        html += '<div class="autodev-empty">无持仓信号</div>';
+      }
+
+      // ── Suggestions from learn() ──
+      const suggestions = (data.analysis || {}).suggestions || [];
+      if (suggestions.length > 0) {
+        html += '<div class="autodev-suggestions">';
+        html += '<div class="autodev-suggestions-title">💡 学习建议</div>';
+        for (const sg of suggestions) {
+          html += `<div class="autodev-suggestion">`;
+          html += `<span class="autodev-sg-type">${sg.type}</span> `;
+          html += `<span class="autodev-sg-reason">${sg.reason}</span>`;
+          html += `</div>`;
+        }
+        html += '</div>';
+      }
+
+      body.innerHTML = html;
+      status.textContent = c.observed_at ? c.observed_at.slice(11, 16) : "";
+    } catch (e) {
+      body.innerHTML = '<div class="autodev-empty">请求失败，请稍后重试</div>';
+      status.textContent = "";
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  btn.addEventListener("click", runAutodev);
+
+  // ── Show strategy picks (e.g. 分红标的池) when strategy has picks ──
+  const picksDiv = document.getElementById("autodev-picks");
+  async function updatePicks() {
+    if (!picksDiv) return;
+    try {
+      const r = await fetch("/api/strategies");
+      const d = await r.json();
+      if (!d.ok) return;
+      const strat = (d.strategies || []).find(s => s.name === selStrategy.value || s.file === selStrategy.value + ".yaml");
+      if (strat && strat.picks && strat.picks.length > 0) {
+        let h = '<table class="picks-table"><thead><tr><th>标的</th><th>股息率</th><th>买点</th><th>仓位</th><th>备注</th></tr></thead><tbody>';
+        for (const p of strat.picks) {
+          h += `<tr><td><b>${p.name}</b></td><td>${(p.dividend_yield * 100).toFixed(1)}%</td><td>${Number(p.entry).toFixed(2)}</td><td>${(p.position * 100).toFixed(0)}%</td><td class="picks-note">${p.note || ""}</td></tr>`;
+        }
+        h += '</tbody></table>';
+        picksDiv.innerHTML = h;
+        picksDiv.style.display = "";
+      } else {
+        picksDiv.style.display = "none";
+        picksDiv.innerHTML = "";
+      }
+    } catch (e) { picksDiv.style.display = "none"; }
+  }
+  selStrategy.addEventListener("change", updatePicks);
+  updatePicks();
+})();
+
+// ── 分红策略 Card (dedicated) ────────────────────────────────────────────────
+(function() {
+  const btn = document.getElementById("btn-dividend-run");
+  const picksDiv = document.getElementById("dividend-picks");
+  const body = document.getElementById("dividend-body");
+  const status = document.getElementById("dividend-status");
+  const selRisk = document.getElementById("dividend-risk");
+  if (!btn || !picksDiv) return;
+
+  function renderPicks(picks) {
+    let h = '<table class="picks-table"><thead><tr><th>标的</th><th>股息率</th><th>买点</th><th>仓位</th><th>备注</th></tr></thead><tbody>';
+    for (const p of picks) {
+      h += `<tr><td><b>${p.name}</b></td><td>${(p.dividend_yield * 100).toFixed(1)}%</td><td>${Number(p.entry).toFixed(2)}</td><td>${(p.position * 100).toFixed(0)}%</td><td class="picks-note">${p.note || ""}</td></tr>`;
+    }
+    h += '</tbody></table>';
+    picksDiv.innerHTML = h;
+  }
+
+  async function loadPicks() {
+    try {
+      const r = await fetch("/api/strategies");
+      const d = await r.json();
+      if (!d.ok) return;
+      const strat = (d.strategies || []).find(s => s.file === "dividend.yaml");
+      if (strat && strat.picks && strat.picks.length > 0) {
+        renderPicks(strat.picks);
+        body.innerHTML = '<div class="autodev-empty">点击「运行分红循环」评估标的池当前状态</div>';
+      } else {
+        picksDiv.innerHTML = '<div class="autodev-empty">未找到分红策略配置</div>';
+      }
+    } catch (e) {
+      picksDiv.innerHTML = '<div class="autodev-empty">加载失败</div>';
+    }
+  }
+
+  async function runDividend() {
+    status.textContent = "运行中…";
+    btn.disabled = true;
+    try {
+      // Use dividend picks as positions (entry as cost)
+      const r1 = await fetch("/api/strategies");
+      const d1 = await r1.json();
+      const strat = (d1.strategies || []).find(s => s.file === "dividend.yaml");
+      const picks = (strat && strat.picks) || [];
+      if (picks.length === 0) { body.innerHTML = '<div class="autodev-empty">无分红标的</div>'; return; }
+
+      const positions = picks.map(p => ({ ticker: p.ticker, name: p.name, shares: p.held ? 1000 : 0, cost: p.entry }));
+
+      const resp = await fetch("/api/autodev/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ positions, strategy: "dividend", risk_pref: selRisk.value }),
+      });
+      const data = await resp.json();
+      if (!data.ok) { body.innerHTML = `<div class="autodev-empty">${data.error || "运行失败"}</div>`; return; }
+
+      let html = "";
+      const signals = data.signals || [];
+      if (signals.length > 0) {
+        html += '<div class="autodev-signals">';
+        for (const sig of signals) {
+          const ac = sig.action || "hold";
+          const acLabel = {buy:"买入",sell:"卖出",hold:"持有",reduce:"减仓",add:"加仓",watch:"观望"}[ac] || ac;
+          const acCls = ac === "sell" || ac === "reduce" ? "ac-sell" : ac === "buy" || ac === "add" ? "ac-buy" : ac === "watch" ? "ac-watch" : "ac-hold";
+          const bars = "█".repeat(sig.strength || 1) + "░".repeat(5 - (sig.strength || 1));
+          html += `<div class="autodev-signal"><span class="autodev-sig-name">${sig.name || sig.ticker}</span>`;
+          html += `<span class="advisor-signal-action ${acCls}">${acLabel}</span>`;
+          html += `<span class="autodev-sig-strength">${bars}</span>`;
+          if (sig.stop_loss) html += `<span class="picks-note">止损 ${sig.stop_loss}</span>`;
+          if (sig.reasons && sig.reasons.length) html += `<span class="autodev-sig-reasons">${sig.reasons.join("；")}</span>`;
+          html += `</div>`;
+        }
+        html += '</div>';
+      } else {
+        html += '<div class="autodev-empty">无信号</div>';
+      }
+      body.innerHTML = html;
+      const c = data.cycle || {};
+      status.textContent = c.observed_at ? c.observed_at.slice(11, 16) : "✓";
+    } catch (e) {
+      body.innerHTML = '<div class="autodev-empty">请求失败</div>';
+      status.textContent = "";
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  btn.addEventListener("click", runDividend);
+  loadPicks();
 })();
 
 // ── Horizontal scroll-hint management ────────────────────────────────────────

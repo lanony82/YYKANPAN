@@ -1,121 +1,105 @@
 # 🚀 YYKANPAN（看盘）— A股决策追踪系统 V3
 
-## YYKANPAN 是什么？
-
-YYKANPAN **不是交易系统，是决策追踪系统**。
-
-大多数散户亏钱不是因为策略差，而是因为：
-- **决策不一致** — 同样的信号，今天做明天不做
-- **情绪化交易** — FOMO 追涨、恐慌割肉
-- **缺少反馈闭环** — 做完就忘，没有复盘
-
-YYKANPAN 的核心理念：
-
-> **人类决策 → 结构化记录 → 行为分析 → 反向优化人**
-
-### 核心概念：Everything is a Decision
-
-```python
-Decision(
-    action="BUY",
-    symbol="晶合集成",
-    price=33.7,
-    size=1000,
-    reason="突破压力位追涨",
-    confidence=0.6,
-    stop_loss=31.5,
-    take_profit=37.0,
-    source="manual"       # manual / rule / ai
-)
-```
-
-每一笔操作都是一个 Decision —— 不管是你自己判断（manual）、规则引擎建议（rule）、还是 AI 生成（ai），统一结构、统一追踪、统一复盘。
-
-### 三层抽象
-
-| 层 | 字段 | 现在做什么 | 未来能做什么 |
-|----|------|-----------|-------------|
-| **Action** | BUY / SELL / HOLD | 记录操作 | 对接券商 API、自动交易 |
-| **Reason** | "跌破支撑位止损" | 人类可读理由 | AI 学习决策风格、发现错误模式 |
-| **Context** | regime/sentiment/volume | 环境快照 | AI 复盘、自动打标签、找"亏钱模式" |
-
-### 示例
-
-**输入：** 持仓 600519.SS（贵州茅台），1000股，成本 1700
+> **不是交易系统，是帮你"少亏钱"的决策追踪系统。**
 
 ```
-curl "http://localhost:5000/api/advisor?positions=[{%22ticker%22:%22600519.SS%22,%22shares%22:1000,%22cost%22:1700}]"
+pip install -r requirements.txt && python src/server.py
 ```
 
-**输出（含可解释因子）：**
+打开 http://127.0.0.1:5000 — 45 个 API、17 张看板卡片、342 项测试。
+
+---
+
+## 为什么需要它？
+
+散户亏钱的三大原因，没有一个是策略问题：
+
+| 问题 | 典型表现 | YYKANPAN 怎么治 |
+|------|---------|----------------|
+| **决策不一致** | 同样的信号，今天做明天不做 | 结构化记录每笔决策，强制一致性 |
+| **情绪化交易** | FOMO 追涨、恐慌割肉 | 交通灯 + 情绪4态机，开盘前先看"能不能做" |
+| **缺少反馈闭环** | 做完就忘，不复盘 | 自动行为分析，找出你的"亏钱模式" |
+
+核心理念：**人类决策 → 结构化记录 → 行为分析 → 反向优化人**
+
+## 30 秒上手
+
+**① 问参谋：这只股票该怎么操作？**
+
+```bash
+curl "http://localhost:5000/api/advisor?positions=[{\"ticker\":\"600519.SS\",\"shares\":1000,\"cost\":1700}]"
+```
 
 ```json
 {
-  "action": "hold",
-  "strength": 1,
+  "action": "hold", "strength": 1,
   "reasons": ["RSI 65.2 — 中性区间", "价格位于布林中轨附近"],
   "factors": [
     {"name": "盈亏", "score": 1, "weight": 0.30, "detail": "浮盈 5%"},
     {"name": "风险", "score": 0, "weight": 0.25, "detail": "无风险事件"},
     {"name": "情绪", "score": 0, "weight": 0.20, "detail": "情绪: 分歧"}
   ],
-  "stop_loss": 1530.0,
-  "take_profit": 2125.0,
+  "stop_loss": 1530.0, "take_profit": 2125.0,
   "portfolio_action": "观望"
 }
 ```
 
-**一键记录决策：**
+**② 记录决策：不管听不听，先存下来**
 
-```
+```bash
 curl -X POST http://localhost:5000/api/advisor/save-decision \
   -H "Content-Type: application/json" \
   -d '{"ticker":"600519.SS","name":"贵州茅台","action":"hold","price":1785,"size":1000,"strength":1}'
 ```
 
-**分析决策模式：**
+**③ 复盘分析：找出你的行为偏差**
 
-```
+```bash
 curl http://localhost:5000/api/decisions/analyze
+# → 低信心决策占比、无止损买入次数、AI vs 人工比例、过度交易预警
 ```
 
-→ 输出：低信心决策占比、无止损买入次数、AI vs 人工决策比例、过度交易预警
+## 核心概念：Everything is a Decision
 
-### 如何运行
+每一笔操作 — 无论人工判断（manual）、规则引擎（rule）、还是 AI 生成（ai）— 都是一个统一结构的 Decision：
 
-```powershell
-pip install -r requirements.txt
-python src/server.py
+```python
+Decision(
+    action="BUY",           # BUY / SELL / HOLD
+    symbol="晶合集成",
+    price=33.7, size=1000,
+    reason="突破压力位追涨",   # 人类可读理由 → 未来 AI 学习决策风格
+    confidence=0.6,
+    stop_loss=31.5, take_profit=37.0,
+    source="manual"          # manual / rule / ai
+)
 ```
 
-打开 http://127.0.0.1:5000 — 38 个 API 端点、14 张看板卡片、322 项测试覆盖。
-
----
-
-> 决策辅助系统：帮你判断"今天能不能做"、"资金在去哪里"、"别冲动"
+统一结构 → 统一追踪 → 统一复盘。
 
 ## 核心能力
 
-| 模块 | 功能 | 数据源 |
-|------|------|--------|
-| **市场情绪** | 4态机（上升/高潮/分歧/退潮）+ 交易建议 | iWenCai + AkShare |
-| **涨跌停统计** | 涨停/跌停家数、连板、最高板 | AkShare |
-| **昨日涨停表现** | 胜率 + 平均涨幅 → 短线周期判定 | AkShare |
-| **主线识别** | 板块聚类 + 龙头股 + 参与建议 | AkShare |
-| **持仓监控** | 实时盈亏、加权涨幅、市值 | Sina + AkShare |
-| **宏观指标** | 上证/美元人民币/黄金/原油 实时芯片 | Sina |
-| **黑天鹅/灰犀牛** | 异常波动自动扫描 + 时段过滤 | 规则引擎 |
-| **八字/五运六气** | 今日四柱 + 岁运/六气/养生/行业提示 | 本地计算 |
-| **Watchdog** | 交通灯 🔴🟡🟢 + 情绪变化推送 | 规则引擎 |
-| **技术信号** | MA/MACD/RSI/KDJ/布林 指标 + 买卖信号 | Sina K线 |
-| **选股策略** | 金叉/放量突破/超跌反弹/涨停接力 | 沪深300+涨停池 |
-| **参谋系统** | 可解释AI决策面板 + 5因子雷达图 + 止盈止损 | 规则引擎 |
-| **决策日志** | 结构化决策记录(BUY/SELL/HOLD) + 行为分析 + 模式挖掘 | 本地JSON |
-| **AutoDev** | YAML策略配置 + 自动决策循环 (observe→decide→act→evaluate→learn) | 规则引擎 |
-| **新股新债** | IPO/可转债 申购日历 | AkShare |
-| **AI策略** | 偏多/偏空/震荡 + 关注/风险标的 | 规则引擎 |
-| **数据源管理** | 自动测速/手动切换数据源优先级 | Sina/AkShare/Yahoo |
-| **隐私模式** | 一键隐藏持仓金额 (****) | 前端 |
+| 模块 | Module | 功能 | 数据源 |
+|------|--------|------|--------|
+| **市场情绪** | Sentiment | 4态机（上升/高潮/分歧/退潮）+ 交易建议 | iWenCai + AkShare |
+| **涨跌停统计** | Limit Stats | 涨停/跌停家数、连板、最高板 | AkShare |
+| **昨日涨停表现** | Prev-day Limit | 胜率 + 平均涨幅 → 短线周期判定 | AkShare |
+| **主线识别** | Mainline | 板块聚类 + 龙头股 + 参与建议 | AkShare |
+| **持仓监控** | Portfolio | 实时盈亏、加权涨幅、市值 | Sina + AkShare |
+| **宏观指标** | Macro | 上证/美元人民币/黄金/原油 实时芯片 | Sina |
+| **黑天鹅/灰犀牛** | Risk Radar | 异常波动自动扫描 + 时段过滤 | 规则引擎 |
+| **万年历** | TCC | 今日四柱 + 岁运/六气/养生/行业提示 | 本地计算 |
+| **看门狗** | Watchdog | 交通灯 🔴🟡🟢 + 情绪变化推送 | 规则引擎 |
+| **技术信号** | Signals | MA/MACD/RSI/KDJ/布林 指标 + 买卖信号 | Sina K线 |
+| **选股策略** | Screener | 金叉/放量突破/超跌反弹/涨停接力 | 沪深300+涨停池 |
+| **参谋系统** | Advisor | 可解释AI决策面板 + 5因子雷达图 + 止盈止损 | 规则引擎 |
+| **决策日志** | Decisions | 结构化决策记录(BUY/SELL/HOLD) + 行为分析 + 模式挖掘 | 本地JSON |
+| **自动参谋** | AutoDev | YAML策略配置 + 自动决策循环 (observe→decide→act→evaluate→learn) | 规则引擎 |
+| **新股新债** | IPO / CB | IPO/可转债 申购日历 | AkShare |
+| **AI策略** | AI Edge | 偏多/偏空/震荡 + 关注/风险标的 | 规则引擎 |
+| **分红日历** | Dividend | 持仓分红预告 + 除权除息日提醒 | AkShare |
+| **数据源管理** | Providers | 自动测速/手动切换数据源优先级 | Sina/AkShare/Yahoo |
+| **隐私模式** | Privacy | 一键隐藏持仓金额 (****) | 前端 |
 
 ## 快速开始
 
@@ -153,8 +137,10 @@ src/
     decision.py       决策日志
     strategy_loader.py YAML策略加载器
     autodev.py        自动决策循环
+    autodev_runner.py 后台自动运行器
   tools/
     bazi_core.py      八字/五运六气计算库
+# TCC: 天干地支 Calendar Calculator，用于万年历、四柱、五运六气等农历相关计算
 static/
   index.html          前端单页面（暗色主题）
   css/style.css       样式表
@@ -164,6 +150,7 @@ data/
   strategies/
     rule_v1.yaml      基础规则引擎（5因子加权打分）
     conservative.yaml  保守策略（重风控轻进攻）
+    dividend.yaml     分红策略（除权除息跟踪）
   sentiment_config.json     情绪阈值配置
   sentiment_history.json    情绪历史
   sentiment_last_known.json 情绪缓存
@@ -173,12 +160,13 @@ docker/
 tests/
   conftest.py             公共 path 设置
   smoke_test.py           集成回归测试（7项）
-  test_advisor.py         参谋系统（25项）
+  test_advisor.py         参谋系统（36项）
   test_analysis.py        分析引擎（21项）
   test_config.py          配置模块（4项）
   test_decision.py        决策日志（53项）
   test_strategy_loader.py  策略加载器（22项）
   test_autodev.py          自动决策循环（25项）
+  test_autodev_runner.py   后台运行器（19项）
   test_new_features.py    新功能集成（33项）
   test_providers.py       数据源层（22项）
   test_screener.py        选股策略（23项）
@@ -212,6 +200,7 @@ tests/
 | `/api/glossary` | GET | 金融术语解释 | — |
 | `/api/macro` | GET | 宏观指标（上证/汇率/黄金/原油） | 60s |
 | `/api/risk-events` | GET | 黑天鹅/灰犀牛扫描 (`?period=1h\|today\|3d\|7d\|30d`) | — |
+| `/api/risk-events` | POST | 自定义风险事件 | — |
 | `/api/bazi` | GET | 今日八字 + 五运六气 | — |
 | `/api/config/export` | GET | 导出配置 | — |
 | `/api/config/import` | POST | 导入配置 | — |
@@ -223,6 +212,7 @@ tests/
 | `/api/decisions/evaluate/<id>` | POST | 评估单笔决策（P&L + 风控） | — |
 | `/api/decisions/analyze` | GET | 决策行为分析（模式挖掘） | — |
 | `/api/strategies` | GET | 可用YAML策略列表 | — |
+| `/api/autodev/run` | POST | 启动后台AutoDev运行 | — |
 | `/api/autodev/cycle` | POST | 执行一轮AutoDev循环 | — |
 | `/api/autodev/status` | GET | AutoDev状态 + 策略信息 | — |
 | `/api/advisor` | GET | AI决策面板（可解释因子） | — |
@@ -247,7 +237,7 @@ tests/
 - **Stats Bar**: 14个指标芯片（持仓/涨跌/最强最弱/市值/盈亏/持仓涨幅/涨停/跌停/昨涨停胜率/情绪/建议）
 - **宏观指标芯片**: 上证指数/美元人民币/黄金/原油 实时价格 + 涨跌箭头
 - **交通灯 Watchdog**: 🟢无告警 / 🟡1-2条 / 🔴3+条；情绪变化自动推送
-- **14张 Insight 卡片**: Watchdog、涨跌停、主线、情绪、简报、AI策略、宏观、风险雷达、八字/五运六气、数据源管理、技术信号、选股、参谋、新股新债
+- **17张 Insight 卡片**: Watchdog、涨跌停、主线、情绪、简报、AI策略、宏观、投资贴士、风险雷达、八字/五运六气、选股、参谋、自动参谋、分红日历、决策日志、新股新债、自选股
 - **黑天鹅/灰犀牛雷达**: 自动扫描异常波动，支持 1h/today/3d/7d/30d 时段切换
 - **八字/五运六气**: 今日四柱纳音 + 岁运/司天/在泉/主客气 + 养生/行业提示
 - **数据源面板**: ⚡ 一键测速、自动选择最快源、手动调整优先级
@@ -276,7 +266,7 @@ python src/collect_stocks.py          # 手动
 ## 测试
 
 ```powershell
-python -m pytest tests/                # 322 项全量测试
+python -m pytest tests/                # 342 项全量测试
 python -m pytest tests/ -x --tb=short  # 遇错即停
 python -m pytest tests/smoke_test.py   # 仅集成烟测（7项）
 ```
@@ -315,7 +305,7 @@ Run a quick end-to-end smoke test (local API + key endpoint contracts):
 python -m pytest tests/smoke_test.py
 ```
 
-Or run the full suite (322 tests):
+Or run the full suite (342 tests):
 
 ```powershell
 python -m pytest tests/ --tb=short

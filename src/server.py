@@ -34,6 +34,7 @@ from data.providers import (
 from trading import decision as dec
 from trading import strategy_loader as strat
 from trading.autodev import AutoDev
+from trading.autodev_runner import run_auto as _autodev_run_auto
 from analysis import advisor as adv
 from analysis import quant
 from analysis import screener
@@ -2553,6 +2554,68 @@ def analyze_decisions():
 
 
 # ── AutoDev endpoints ─────────────────────────────────────────────────────────
+
+@app.route("/api/autodev/run", methods=["POST"])
+def api_autodev_run():
+    """One-click AutoDev: auto-fetch prices/sentiment/risk, run full cycle.
+
+    Body (minimal): {"positions": [{"ticker":"600519","shares":100,"cost":1800}]}
+    Optional: strategy, risk_pref
+    """
+    data = request.get_json(silent=True) or {}
+    strategy_name = data.get("strategy", "rule_v1")
+    risk_pref = data.get("risk_pref", "balanced")
+    client_positions = data.get("positions", [])
+
+    if not client_positions:
+        return jsonify({"ok": False, "error": "positions required (ticker/shares/cost)"}), 400
+
+    try:
+        strat.load_strategy(strategy_name)
+    except FileNotFoundError:
+        return jsonify({"ok": False, "error": f"Strategy '{strategy_name}' not found"}), 404
+
+    # ── Auto-fetch: stock prices ──
+    rows = _get_stocks_snapshot()
+    stock_map = {r["ticker"]: r for r in rows if not r.get("error")}
+
+    # ── Auto-fetch: market regime ──
+    brief = _build_auto_brief()
+    regime = brief.get("snapshot", {}).get("regime", "震荡")
+
+    # ── Auto-fetch: sentiment ──
+    sentiment_stage = "分歧"
+    sentiment_score = 0
+    tradable = True
+    history = _load_sentiment_history()
+    if history:
+        last = history[-1]
+        sentiment_stage = last.get("stage", "分歧")
+        sentiment_score = last.get("score", 0)
+        tradable = sentiment_stage == "上升"
+
+    # ── Auto-fetch: AI confidence ──
+    ai = _build_ai_edge_report()
+    confidence = ai.get("summary", {}).get("confidence", 50.0)
+
+    # ── Auto-fetch: risk events ──
+    _scan_risk_events()
+    risk_events = _RISK_EVENT_HISTORY[-20:]
+
+    result = _autodev_run_auto(
+        holdings=client_positions,
+        stock_map=stock_map,
+        regime=regime,
+        sentiment_stage=sentiment_stage,
+        sentiment_score=sentiment_score,
+        tradable=tradable,
+        confidence=confidence,
+        risk_events=risk_events,
+        strategy_name=strategy_name,
+        risk_pref=risk_pref,
+    )
+    return jsonify(result)
+
 
 @app.route("/api/strategies", methods=["GET"])
 def api_list_strategies():

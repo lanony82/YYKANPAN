@@ -60,19 +60,29 @@ class AutoDev:
         actionable = ("buy", "sell", "reduce", "add")
         action_map = {"buy": "BUY", "sell": "SELL", "reduce": "SELL", "add": "BUY"}
 
+        # Build ticker→position lookup for price/size
+        pos_map = {p.ticker: p for p in observation.get("positions", [])}
+
         for sig in signals:
             if sig.action not in actionable:
                 continue
+
+            pos = pos_map.get(sig.ticker)
+            entry_price = pos.price if pos else 0.0
+            size = pos.shares if pos else 0
 
             d = create_decision(
                 title=f"[AutoDev] {sig.name} → {sig.action}",
                 dtype="trade",
                 action=action_map.get(sig.action, "HOLD"),
                 symbol=sig.name,
+                price=entry_price,
+                size=size,
                 confidence=sig.strength / 5.0,
                 stop_loss=sig.stop_loss,
                 take_profit=sig.take_profit,
                 source="rule",
+                state="acted",
                 trade_context={
                     "strategy": self.strategy.name,
                     "risk_pref": self.risk_pref,
@@ -105,7 +115,8 @@ class AutoDev:
             if sym in current_prices:
                 try:
                     r = evaluate(d["id"], current_prices[sym])
-                    results.append(r)
+                    if r.get("ok"):
+                        results.append(r)
                 except Exception:
                     pass
         return results
@@ -170,6 +181,7 @@ class AutoDev:
             "strategy": self.strategy.name,
             "version": self.strategy.version,
             "risk_pref": self.risk_pref,
+            "positions_count": len(positions),
             "signals_count": len(signals),
             "acted_count": len(acted),
             "evaluations_count": len(evals),

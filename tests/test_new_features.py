@@ -290,12 +290,14 @@ class TestMacroHistoryEndpoint:
 class TestRiskEventsEndpoint:
 
     def test_risk_events_empty(self, client):
-        """No events when macro is flat and no stocks loaded."""
+        """No events when macro is flat, no stocks loaded, and history cleared."""
         with patch.object(stock_app, "_fetch_macro_indicators", return_value=[
             {"name": "上证指数", "change_pct": 0.5, "price": 3360, "prev": 3340},
-        ]):
+        ]), patch.object(stock_app, "_scan_news_events", return_value=[]):
             saved = stock_app.STOCKS_CACHE_DATA
+            saved_history = stock_app._RISK_EVENT_HISTORY[:]
             stock_app.STOCKS_CACHE_DATA = []
+            stock_app._RISK_EVENT_HISTORY.clear()
             try:
                 rv = client.get("/api/risk-events")
                 assert rv.status_code == 200
@@ -304,6 +306,7 @@ class TestRiskEventsEndpoint:
                 assert data["count"] == 0
             finally:
                 stock_app.STOCKS_CACHE_DATA = saved
+                stock_app._RISK_EVENT_HISTORY[:] = saved_history
 
     def test_risk_event_shanghai_crash(self, client):
         """Shanghai index drop >=3% should trigger event."""

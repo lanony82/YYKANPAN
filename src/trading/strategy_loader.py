@@ -135,6 +135,7 @@ class YAMLStrategy:
         self._risk_profiles: dict = config.get("risk_profiles", {})
         self._factors: list[dict] = config.get("factors", [])
         self._portfolio: dict = config.get("portfolio", {})
+        self.picks: list[dict] = config.get("picks", [])
 
         # Validate: all evaluators must be registered
         for f in self._factors:
@@ -175,6 +176,7 @@ class YAMLStrategy:
         reasons: list[str] = []
         best_action = "hold"
         best_strength = 1
+        is_watching = pos.shares == 0  # not held — watch/candidate mode
 
         for fconf in self._factors:
             evaluator = EVALUATORS[fconf["evaluator"]]
@@ -201,7 +203,16 @@ class YAMLStrategy:
             round(pos.cost * (1 + th["take_profit"]), 2) if pos.cost > 0 else None
         )
 
-        if not reasons:
+        # For non-held positions, override action to watch/buy candidates
+        if is_watching:
+            if best_action in ("hold", "add"):
+                best_action = "watch"
+                if not reasons:
+                    reasons.append("未持仓，等待买点")
+            # buy/sell signals still pass through for candidates
+            if not reasons:
+                reasons.append("未持仓候选")
+        elif not reasons:
             reasons.append("无明显信号，建议持有观望")
 
         return Signal(
@@ -250,15 +261,16 @@ def list_strategies() -> list[dict]:
         if path.suffix in (".yaml", ".yml", ".json"):
             try:
                 config = _load_config(path)
-                strategies.append(
-                    {
-                        "name": config.get("name", path.stem),
-                        "version": config.get("version", 1),
-                        "description": config.get("description", ""),
-                        "file": path.name,
-                        "factors": len(config.get("factors", [])),
-                    }
-                )
+                entry = {
+                    "name": config.get("name", path.stem),
+                    "version": config.get("version", 1),
+                    "description": config.get("description", ""),
+                    "file": path.name,
+                    "factors": len(config.get("factors", [])),
+                }
+                if config.get("picks"):
+                    entry["picks"] = config["picks"]
+                strategies.append(entry)
             except Exception:
                 pass
     return strategies
