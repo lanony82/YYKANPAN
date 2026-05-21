@@ -130,6 +130,12 @@ FAKE_SINA_MACRO_RAW = (
     'var hq_str_sh000001="上证指数,3350.00,3300.00,3360.00,3370.00,3340.00,'
     '3350.00,3360.00,200000000,180000000000,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'
     '0,0,0,0,0,2026-05-11,15:00:00,00";\n'
+    'var hq_str_sz399001="深证成指,11000.00,10900.00,11050.00,11100.00,10880.00,'
+    '11000.00,11050.00,300000000,220000000000,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'
+    '0,0,0,0,0,2026-05-11,15:00:00,00";\n'
+    'var hq_str_sz399006="创业板指,2800.00,2780.00,2810.00,2820.00,2770.00,'
+    '2800.00,2810.00,100000000,80000000000,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'
+    '0,0,0,0,0,2026-05-11,15:00:00,00";\n'
     'var hq_str_fx_susdcny="15:00:00,7.2000,7.2200,7.1800,7.2300,7.1700,'
     '7.2100,0,0,0,0,0,0,0";\n'
     'var hq_str_hf_GC="2650.50,2660.00,2640.00,2655.00,0,0,0,2645.00,'
@@ -141,8 +147,24 @@ FAKE_SINA_MACRO_RAW = (
 
 class TestMacroEndpoint:
 
+    # [claude code] 跨测试自动复位宏观缓存。否则 test_macro_returns_list 跑完留下
+    # 已填充的 _MACRO_CACHE，会让 test_macro_cache_hit 的"第一次请求"直接命中缓存，
+    # urlopen 调用次数变成 0 → 断言看起来通过，实际什么都没测。
+    # 同时复位北向独立缓存 (_NB_CACHE) 避免相同问题。
+    @pytest.fixture(autouse=True)
+    def _reset_macro_cache(self):
+        stock_app._MACRO_CACHE = None
+        stock_app._MACRO_CACHE_TS = 0
+        stock_app._NB_CACHE = None
+        stock_app._NB_CACHE_TS = 0
+        yield
+        stock_app._MACRO_CACHE = None
+        stock_app._MACRO_CACHE_TS = 0
+        stock_app._NB_CACHE = None
+        stock_app._NB_CACHE_TS = 0
+
     def test_macro_returns_list(self, client):
-        """GET /api/macro should return a JSON list."""
+        """GET /api/macro should return a JSON list with indexes + turnover."""
         with patch.object(stock_app.urlrequest, "urlopen") as mock_open:
             mock_resp = MagicMock()
             mock_resp.read.return_value = FAKE_SINA_MACRO_RAW.encode("gbk")
@@ -154,7 +176,15 @@ class TestMacroEndpoint:
             assert rv.status_code == 200
             data = rv.get_json()
             assert isinstance(data, list)
-            assert len(data) >= 1
+            symbols = [d["symbol"] for d in data]
+            # Should have 3 indexes + turnover + forex + gold + oil = 7
+            assert "sh000001" in symbols
+            assert "sz399001" in symbols
+            assert "sz399006" in symbols
+            assert "vol_total" in symbols
+            vol = [d for d in data if d["symbol"] == "vol_total"][0]
+            assert vol["unit"] == "亿"
+            assert vol["price"] == 4000.0  # (1800+2200)亿
 
     def test_macro_shanghai_parsed(self, client):
         with patch.object(stock_app.urlrequest, "urlopen") as mock_open:
@@ -174,6 +204,9 @@ class TestMacroEndpoint:
 
     def test_macro_cache_hit(self, client):
         """Second call within TTL should not fetch again."""
+        # [claude code] 断言改成 delta = 0 而不是"两次相等"。原写法依赖固定的
+        # call_count 值，但实际数字会随 fetch 实现变化（加/去 EM、改并发模式
+        # 都会影响绝对调用次数）。更稳的契约是"第二次调用不再产生新的网络请求"。
         with patch.object(stock_app.urlrequest, "urlopen") as mock_open:
             mock_resp = MagicMock()
             mock_resp.read.return_value = FAKE_SINA_MACRO_RAW.encode("gbk")
@@ -182,8 +215,11 @@ class TestMacroEndpoint:
             mock_open.return_value = mock_resp
 
             client.get("/api/macro")
+            count_after_first = mock_open.call_count
             client.get("/api/macro")
-            assert mock_open.call_count == 1
+            count_after_second = mock_open.call_count
+            # 第二次必须 0 新增请求；具体数字（1?2?）由实现决定，不在契约里
+            assert count_after_second == count_after_first
 
     def test_macro_network_error(self, client):
         """Network failure should return error entry."""
@@ -192,6 +228,187 @@ class TestMacroEndpoint:
             data = rv.get_json()
             assert isinstance(data, list)
             assert any("error" in d for d in data)
+
+    # [claude code] 直接覆盖 _fetch_northbound_flow：原来这个函数完全没测试，
+    # 而且它被外层 try/except 吞异常，意味着哪怕字段名拼错或单位换算错，
+    # /api/macro 的测试也不会失败 → 回归会静默漏过。下面用 mock EM 响应：
+    # (1) 验证万元→亿换算 (2) 验证 sanity clamp（防 EM 改单位时显示离谱数字）
+    # (3) 验证空响应也被缓存（避免空响应每分钟重试）
+    def test_northbound_unit_conversion(self):
+        """EM 返回万元，应换算为亿元 (除以 1e4)。"""
+        fake_em = json.dumps({
+            "result": {"data": [
+                # 沪股通 + 深股通 同一天 → 累加。100 亿 = 1,000,000 万元
+                {"TRADE_DATE": "2026-05-19 00:00:00", "NET_DEAL_AMT": 600000.0},
+                {"TRADE_DATE": "2026-05-19 00:00:00", "NET_DEAL_AMT": 400000.0},
+            ]}
+        }).encode("utf-8")
+        with patch.object(stock_app.urlrequest, "urlopen") as mock_open:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = fake_em
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_open.return_value = mock_resp
+            r = stock_app._fetch_northbound_flow()
+        assert r is not None
+        assert r["symbol"] == "northbound"
+        assert r["price"] == 100.0  # 1,000,000 万元 → 100 亿
+        assert r["unit"] == "亿"
+        assert r["change"] == 0  # special chip 契约：change 必须为 0
+        assert r["no_sparkline"] is True
+        # [claude code] 验证缓存写入：成功路径必须填充 _NB_CACHE / _NB_CACHE_TS，
+        # 否则下次调用会重新打 EM → 退回到每分钟过度抓取的回归。
+        assert stock_app._NB_CACHE is r
+        assert stock_app._NB_CACHE_TS > 0
+
+    def test_northbound_sanity_clamp(self):
+        """异常大的值（比如 EM 改了单位）应被丢弃，避免 UI 显示离谱数字。"""
+        # 5e10 万元 / 1e4 = 5e6 亿 = 500 万亿元，远超历史上限 (~±300 亿) → return None
+        fake_em = json.dumps({
+            "result": {"data": [
+                {"TRADE_DATE": "2026-05-19 00:00:00", "NET_DEAL_AMT": 5e10},
+            ]}
+        }).encode("utf-8")
+        with patch.object(stock_app.urlrequest, "urlopen") as mock_open:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = fake_em
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_open.return_value = mock_resp
+            r = stock_app._fetch_northbound_flow()
+        assert r is None
+
+    def test_vol_total_inserted_after_last_index_when_one_fails(self, client):
+        """[claude code] Issue #3: 一个指数解析失败时，vol_total 仍应紧跟最后一个
+        成功的指数后面，不应漏到 fx/黄金/原油 之间。"""
+        # sz399006 字段截断 → IndexError → 该指数被跳过
+        broken_raw = (
+            'var hq_str_sh000001="上证指数,3350.00,3300.00,3360.00,3370.00,3340.00,'
+            '3350.00,3360.00,200000000,180000000000,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'
+            '0,0,0,0,0,2026-05-11,15:00:00,00";\n'
+            'var hq_str_sz399001="深证成指,11000.00,10900.00,11050.00,11100.00,10880.00,'
+            '11000.00,11050.00,300000000,220000000000,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'
+            '0,0,0,0,0,2026-05-11,15:00:00,00";\n'
+            'var hq_str_sz399006="创业板指,2800.00";\n'  # truncated → IndexError on field[3]
+            'var hq_str_fx_susdcny="15:00:00,7.2000,7.2200,7.1800,7.2300,7.1700,'
+            '7.2100,0,0,0,0,0,0,0";\n'
+            'var hq_str_hf_GC="2650.50,2660.00,2640.00,2655.00,0,0,0,2645.00,'
+            '0,0,0,0,0,2026-05-11";\n'
+            'var hq_str_hf_CL="72.30,73.00,71.50,72.80,0,0,0,71.00,'
+            '0,0,0,0,0,2026-05-11";\n'
+        )
+        with patch.object(stock_app.urlrequest, "urlopen") as mock_open:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = broken_raw.encode("gbk")
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_open.return_value = mock_resp
+            rv = client.get("/api/macro")
+        data = rv.get_json()
+        symbols = [d["symbol"] for d in data]
+        # 创业板指被跳过，所以只有 2 个指数。vol_total 必须紧跟 sz399001 后，
+        # 不能跑到 fx_susdcny/黄金/原油 之间。
+        assert "sz399006" not in symbols
+        vol_idx = symbols.index("vol_total")
+        sz_idx = symbols.index("sz399001")
+        assert vol_idx == sz_idx + 1, f"vol_total at {vol_idx}, expected {sz_idx+1}; symbols={symbols}"
+        # 同时确认 vol_total 在 fx 之前
+        assert vol_idx < symbols.index("fx_susdcny")
+
+    def test_macro_empty_result_not_cached(self, client):
+        """[claude code] Issue #4 fix: 全部解析失败时不应缓存空列表，
+        否则 60 秒内每次请求都返回空，前端一直显示"暂无数据"。"""
+        # 所有 hq_str 行都拼错 → fields 解析后无匹配分支 → results == []
+        # 用 hq_str_unknown 让 symbol-key 提取成功但所有 if 分支都不匹配。
+        garbage = b'var hq_str_unknown_x="a,b,c,d,e,f,g,h";\n'
+        with patch.object(stock_app.urlrequest, "urlopen") as mock_open:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = garbage
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_open.return_value = mock_resp
+            client.get("/api/macro")
+            client.get("/api/macro")
+        # 缓存空列表会让第二次走缓存 → call_count == 1。
+        # 修复后空结果不缓存，第二次必须重新请求 → call_count >= 2。
+        assert mock_open.call_count >= 2
+        # 同时确认 _MACRO_CACHE 仍为 None（没被空列表污染）
+        assert stock_app._MACRO_CACHE is None
+
+    def test_northbound_clamp_boundary(self):
+        """[claude code] 5000 亿 是 sanity 阈值边界。略低于阈值应保留，略高应丢弃。
+        防止未来有人改成 500 或 50000 而测试还过。"""
+        # 4900 亿 = 4.9e7 万元 → 应保留
+        keep_em = json.dumps({"result": {"data": [
+            {"TRADE_DATE": "2026-05-19 00:00:00", "NET_DEAL_AMT": 4.9e7},
+        ]}}).encode("utf-8")
+        with patch.object(stock_app.urlrequest, "urlopen") as mock_open:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = keep_em
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_open.return_value = mock_resp
+            r = stock_app._fetch_northbound_flow()
+        assert r is not None and abs(r["price"] - 4900.0) < 0.01
+
+        # 复位缓存再测丢弃路径
+        stock_app._NB_CACHE = None
+        stock_app._NB_CACHE_TS = 0
+
+        # 5100 亿 → 超过 5000 阈值 → 应丢弃
+        drop_em = json.dumps({"result": {"data": [
+            {"TRADE_DATE": "2026-05-19 00:00:00", "NET_DEAL_AMT": 5.1e7},
+        ]}}).encode("utf-8")
+        with patch.object(stock_app.urlrequest, "urlopen") as mock_open:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = drop_em
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_open.return_value = mock_resp
+            r = stock_app._fetch_northbound_flow()
+        assert r is None
+
+    def test_northbound_date_format_variants(self):
+        """[claude code] EM 偶尔会变 TRADE_DATE 格式。slice [:10] 必须对常见三种格式
+        都给出一致的日期键，否则会出现"两条同一天的记录被分到不同 key 不累加"。"""
+        # 同一日期的两条记录，但格式不同 → 应被规范化到同一个日期 → 累加
+        for fmt_pair in [
+            ("2026-05-19 00:00:00", "2026-05-19"),         # space + date-only
+            ("2026-05-19T00:00:00", "2026-05-19"),         # ISO T + date-only
+            ("2026-05-19 00:00:00", "2026-05-19T15:00:00"),  # space + ISO T
+        ]:
+            stock_app._NB_CACHE = None
+            stock_app._NB_CACHE_TS = 0
+            fake_em = json.dumps({"result": {"data": [
+                {"TRADE_DATE": fmt_pair[0], "NET_DEAL_AMT": 600000.0},
+                {"TRADE_DATE": fmt_pair[1], "NET_DEAL_AMT": 400000.0},
+            ]}}).encode("utf-8")
+            with patch.object(stock_app.urlrequest, "urlopen") as mock_open:
+                mock_resp = MagicMock()
+                mock_resp.read.return_value = fake_em
+                mock_resp.__enter__ = lambda s: s
+                mock_resp.__exit__ = MagicMock(return_value=False)
+                mock_open.return_value = mock_resp
+                r = stock_app._fetch_northbound_flow()
+            assert r is not None, f"failed for {fmt_pair}"
+            # 两条都应累加 → 100 亿
+            assert r["price"] == 100.0, f"format {fmt_pair} → got {r['price']}"
+            assert r["date"] == "2026-05-19"
+
+    def test_northbound_empty_response_cached(self):
+        """空响应也应缓存 → 避免每分钟重试 EM。"""
+        fake_em = json.dumps({"result": {"data": []}}).encode("utf-8")
+        with patch.object(stock_app.urlrequest, "urlopen") as mock_open:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = fake_em
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_open.return_value = mock_resp
+            r1 = stock_app._fetch_northbound_flow()
+            r2 = stock_app._fetch_northbound_flow()
+        assert r1 is None and r2 is None
+        # 第二次应直接走缓存，不再调用 urlopen
+        assert mock_open.call_count == 1
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C \"c:/Users/myang2/OneDrive - SS&C Technologies, Inc/Documents/2026/FUN\" diff --stat HEAD)",
+      "Bash(git -C \"c:/Users/myang2/OneDrive - SS&C Technologies, Inc/Documents/2026/FUN\" diff HEAD -- src/server.py)",
+      "Bash(git -C \"c:/Users/myang2/OneDrive - SS&C Technologies, Inc/Documents/2026/FUN\" diff HEAD -- static/js/app.js static/css/style.css tests/test_new_features.py)"
+    ]
+  }
+}

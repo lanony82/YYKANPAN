@@ -1201,6 +1201,27 @@ function renderMacroChips(data) {
   const bar = document.getElementById("macro-bar");
   if (!bar) return;
   bar.innerHTML = data.map(d => {
+    // Special chips: 两市成交额 and 北向资金 show amount only
+    // [claude code] Special chips 契约：只读 d.price（金额本身），
+    // 不读 change/change_pct——后端那两个字段对 special chip 永远是 0。
+    // 颜色由 price 正负决定。普通 chip（指数/外汇/商品）走下面分支，读 change_pct。
+    if (d.symbol === "vol_total") {
+      const val = d.price >= 10000 ? (d.price / 10000).toFixed(2) + "万亿" : d.price + "亿";
+      return `<div class="macro-chip macro-chip-vol">
+        <span class="macro-name">${d.name}</span>
+        <span class="macro-price">${val}</span>
+      </div>`;
+    }
+    if (d.symbol === "northbound") {
+      // [claude code] 颜色判断基于 price：北向净流入正/负 = 红/绿/灰。
+      // 真正的 0 净流入很罕见，灰色对它来说就是正确显示。
+      const dir = d.price > 0 ? "up" : d.price < 0 ? "down" : "flat";
+      const sign = d.price > 0 ? "+" : "";
+      return `<div class="macro-chip macro-chip-nb">
+        <span class="macro-name">${d.name}${d.date ? '<span class="macro-date">' + d.date.slice(5) + '</span>' : ''}</span>
+        <span class="macro-price ${dir}">${sign}${d.price}${d.unit || ""}</span>
+      </div>`;
+    }
     const dir = d.change_pct > 0 ? "up" : d.change_pct < 0 ? "down" : "flat";
     const arrow = d.change_pct > 0 ? "▲" : d.change_pct < 0 ? "▼" : "—";
     const sign = d.change > 0 ? "+" : "";
@@ -1216,6 +1237,7 @@ function renderMacroChips(data) {
 
 function loadMacroSparklines(indicators, days) {
   indicators.forEach(d => {
+    if (d.no_sparkline) return;
     const sparkId = `macro-spark-${d.symbol.replace(/[^a-zA-Z0-9]/g, "_")}`;
     const el = document.getElementById(sparkId);
     if (!el) return;
@@ -2292,6 +2314,50 @@ loadWatchdogConfig();
       if (btn) { btn.textContent = "◆"; btn.title = "取消固定"; }
     }
   });
+})();
+
+// ── [claude code] Beginner mode (新手三键模式) ──────────────────────────────
+// Default surface for first-time users: only 3 cards (stats/advisor/decisions)
+// + the always-visible 我的持仓 stock section. Power-user controls
+// (drag/pin/close/hide-all/fold-all/layout selector) are CSS-suppressed via
+// body.beginner-mode in style.css. Toggling switches body class only;
+// all other state (HIDDEN_KEY/COLLAPSE_KEY/LOCK_KEY/CARD_ORDER) stays intact,
+// so leaving beginner mode restores whatever the user had before.
+(function initBeginnerMode() {
+  const KEY = "beginner_mode_v1";
+  const btn = document.getElementById("btn-mode-toggle");
+  if (!btn) return;
+
+  // First-time detection: if user has NEVER touched any power-user state,
+  // they're a newbie → default ON. If any of those keys exist, they've used
+  // the dashboard before → keep advanced default OFF.
+  function isFirstTime() {
+    return !localStorage.getItem("hidden_cards_v1")
+        && !localStorage.getItem("card_collapsed_v1")
+        && !localStorage.getItem("card_locked_v1")
+        && !localStorage.getItem("card_order_v1")
+        && !localStorage.getItem("card_cols_v1");
+  }
+
+  function isOn() {
+    const v = localStorage.getItem(KEY);
+    if (v === null) return isFirstTime();   // auto-enable for newbies
+    return v === "1";
+  }
+
+  function apply(on) {
+    document.body.classList.toggle("beginner-mode", on);
+    btn.textContent = on ? "🎓 新手" : "⚙️ 进阶";
+    btn.title = on ? "当前：新手模式（点击切换到进阶）" : "当前：进阶模式（点击切换到新手）";
+  }
+
+  btn.addEventListener("click", () => {
+    const next = !isOn();
+    localStorage.setItem(KEY, next ? "1" : "0");
+    apply(next);
+  });
+
+  apply(isOn());
 })();
 
 // ── Column layout selector ─────────────────────────────────────────────────────────

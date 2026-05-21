@@ -6,7 +6,7 @@
 pip install -r requirements.txt && python src/server.py
 ```
 
-打开 http://127.0.0.1:5000 — 45 个 API、17 张看板卡片、342 项测试。
+打开 http://127.0.0.1:5000 — 45 个 API、17 张看板卡片、366 项测试。
 
 ---
 
@@ -86,7 +86,7 @@ Decision(
 | **昨日涨停表现** | Prev-day Limit | 胜率 + 平均涨幅 → 短线周期判定 | AkShare |
 | **主线识别** | Mainline | 板块聚类 + 龙头股 + 参与建议 | AkShare |
 | **持仓监控** | Portfolio | 实时盈亏、加权涨幅、市值 | Sina + AkShare |
-| **宏观指标** | Macro | 上证/美元人民币/黄金/原油 实时芯片 | Sina |
+| **宏观指标** | Macro | 上证/深证/创业板/两市成交/北向/汇率/黄金/原油 | Sina + 东方财富 |
 | **黑天鹅/灰犀牛** | Risk Radar | 异常波动自动扫描 + 时段过滤 | 规则引擎 |
 | **万年历** | TCC | 今日四柱 + 岁运/六气/养生/行业提示 | 本地计算 |
 | **看门狗** | Watchdog | 交通灯 🔴🟡🟢 + 情绪变化推送 | 规则引擎 |
@@ -167,6 +167,7 @@ tests/
   test_strategy_loader.py  策略加载器（22项）
   test_autodev.py          自动决策循环（25项）
   test_autodev_runner.py   后台运行器（19项）
+  test_decision_quality.py 决策质量测试（21项）— 场景+逻辑一致性
   test_new_features.py    新功能集成（33项）
   test_providers.py       数据源层（22项）
   test_screener.py        选股策略（23项）
@@ -198,7 +199,7 @@ tests/
 | `/api/quickread` | POST | 新闻一键解读 | — |
 | `/api/macro-impact` | POST | 宏观事件影响分析 | — |
 | `/api/glossary` | GET | 金融术语解释 | — |
-| `/api/macro` | GET | 宏观指标（上证/汇率/黄金/原油） | 60s |
+| `/api/macro` | GET | 宏观指标（上证/深证/创业板/两市成交/北向/汇率/黄金/原油） | 60s |
 | `/api/risk-events` | GET | 黑天鹅/灰犀牛扫描 (`?period=1h\|today\|3d\|7d\|30d`) | — |
 | `/api/risk-events` | POST | 自定义风险事件 | — |
 | `/api/bazi` | GET | 今日八字 + 五运六气 | — |
@@ -234,8 +235,9 @@ tests/
 
 ## 前端功能
 
+- **🎓 新手三键模式**: 首次打开自动启用，只显示 3 张核心卡片（行情概览 + 参谋信号 + 决策日志）+ 我的持仓。隐藏拖拽/固定/折叠/关闭按钮，避免误操作。点击 `🎓 新手` 按钮一键切换到进阶模式（17 张全开），状态独立保存（`beginner_mode_v1`），切回时完整恢复用户原布局。
 - **Stats Bar**: 14个指标芯片（持仓/涨跌/最强最弱/市值/盈亏/持仓涨幅/涨停/跌停/昨涨停胜率/情绪/建议）
-- **宏观指标芯片**: 上证指数/美元人民币/黄金/原油 实时价格 + 涨跌箭头
+- **宏观指标芯片**: 上证/深证/创业板/两市成交额/北向资金/汇率/黄金/原油 + sparkline
 - **交通灯 Watchdog**: 🟢无告警 / 🟡1-2条 / 🔴3+条；情绪变化自动推送
 - **17张 Insight 卡片**: Watchdog、涨跌停、主线、情绪、简报、AI策略、宏观、投资贴士、风险雷达、八字/五运六气、选股、参谋、自动参谋、分红日历、决策日志、新股新债、自选股
 - **黑天鹅/灰犀牛雷达**: 自动扫描异常波动，支持 1h/today/3d/7d/30d 时段切换
@@ -266,7 +268,7 @@ python src/collect_stocks.py          # 手动
 ## 测试
 
 ```powershell
-python -m pytest tests/                # 342 项全量测试
+python -m pytest tests/                # 366 项全量测试
 python -m pytest tests/ -x --tb=short  # 遇错即停
 python -m pytest tests/smoke_test.py   # 仅集成烟测（7项）
 ```
@@ -305,7 +307,7 @@ Run a quick end-to-end smoke test (local API + key endpoint contracts):
 python -m pytest tests/smoke_test.py
 ```
 
-Or run the full suite (342 tests):
+Or run the full suite (366 tests):
 
 ```powershell
 python -m pytest tests/ --tb=short

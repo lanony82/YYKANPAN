@@ -71,10 +71,16 @@
   <button class="col-btn col-layout" data-cols="auto" title="自动适应">⭐</button>
   <span class="restore-bar" id="restore-bar"></span>
   <span class="layout-bar-right">
+    <button class="col-btn mode-btn" id="btn-mode-toggle" title="切换 新手/进阶 模式">🎓 新手</button>
     <button class="col-btn" id="btn-fold-toggle" title="全部折叠/展开">−</button>
     <button class="col-btn" id="btn-hide-all" title="隐藏/显示全部卡片">👁</button>
     <button class="col-btn" id="btn-toggle-stocks" title="滚动到持仓卡片">📊</button>
   </span>
+</div>
+<!-- [claude code] Beginner-mode banner: visible only when body.beginner-mode -->
+<div class="beginner-banner">
+  🎓 当前为<b>新手模式</b>：只显示「行情概览 / 参谋信号 / 决策日志」。
+  点击右上角 <b>🎓 新手</b> 切换到进阶模式查看全部 17 张卡片。
 </div>
 </div>
 

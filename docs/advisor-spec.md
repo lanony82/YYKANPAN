@@ -120,3 +120,42 @@ Multiple rules → highest strength wins, reasons merged.
 ```
 AutoDev.decide() → strategy.evaluate(pos, ctx, risk_pref) → Signal
 ```
+
+---
+
+## Decision Quality Tests (v3.3+)
+
+文件: `tests/test_decision_quality.py` — 21 项
+
+传统单元测试覆盖正确性；决策质量测试覆盖"决策是否合理"。
+
+### Category 1: 场景测试 (TestBlackSwanScenarios, 7项)
+
+| # | 场景 | 预期 |
+|---|------|------|
+| 1 | 黑天鹅事件 | 个股 sell/reduce + 组合"清仓避险" |
+| 2 | 盈利中遇黑天鹅 | 仍触发卖出（不被利润覆盖） |
+| 3 | 跌破止损线 | sell, strength=5（三种 risk_pref） |
+| 4 | 退潮+不可交易 | 不给 buy/add |
+| 5 | 灰犀牛 | 风险因子 score=-1 |
+| 6 | 多仓同时大跌 | 组合"减仓"或"清仓避险" |
+| 7 | 强牛市+高信心 | 组合"加仓" |
+
+### Category 2: 逻辑一致性 (TestLogicalConsistency, 14项)
+
+用 seed=42 生成 100 个随机 portfolio，验证 14 条不变量：
+
+1. 不崩溃（ok=True）
+2. action ∈ {buy, sell, hold, reduce, add}
+3. strength ∈ [1, 5]
+4. 5 个 factor 齐全（盈亏/价位/风险/情绪/趋势）
+5. factor.score ∈ [-2, +2]
+6. factor weights 和 = 1.0
+7. stop_loss < take_profit
+8. portfolio_action ∈ {加仓, 减仓, 观望, 清仓避险}
+9. 黑天鹅时不建议"加仓"
+10. sell/reduce 必有 reasons
+11. 跌破止损线 → 必须 sell
+12. signal 数 == position 数
+13. 空 portfolio → "观望"
+14. conservative ≥ aggressive 防御性

@@ -1638,10 +1638,17 @@ def config_import():
 
 # ── Macro indicators (宏观指标) ───────────────────────────────────────────────
 
-_MACRO_SYMBOLS = "sh000001,fx_susdcny,hf_GC,hf_CL"
+_MACRO_SYMBOLS = "sh000001,sz399001,sz399006,fx_susdcny,hf_GC,hf_CL"
 _MACRO_CACHE: dict | None = None
 _MACRO_CACHE_TS: float = 0
 _MACRO_CACHE_TTL = 60  # seconds
+
+# [claude code] 北向资金独立缓存：东方财富每日只更新一次（收盘后），
+# 主宏观缓存 60s 过期会导致每个交易日重复请求 ~240 次。这里改为 30 分钟，
+# 把北向请求频率压到每天 ~8 次，避免对方限流。
+_NB_CACHE: dict | None = None
+_NB_CACHE_TS: float = 0
+_NB_CACHE_TTL = 1800  # 30 minutes — northbound is daily data
 
 
 def _fetch_macro_indicators() -> list[dict]:
@@ -1663,6 +1670,7 @@ def _fetch_macro_indicators() -> list[dict]:
         return [{"name": "Error", "error": str(e)}]
 
     results = []
+    total_turnover = 0.0  # accumulate SH + SZ turnover for 两市成交额
     for line in raw.strip().split("\n"):
         line = line.strip()
         if not line or '="' not in line:
@@ -1674,17 +1682,22 @@ def _fetch_macro_indicators() -> list[dict]:
             continue
 
         try:
-            if symbol == "sh000001":
-                # Shanghai index: [0]=name [1]=open [2]=prev_close [3]=price
+            if symbol in ("sh000001", "sz399001", "sz399006"):
+                # Index: [0]=name [1]=open [2]=prev_close [3]=price
                 # [4]=high [5]=low ... [8]=volume [9]=turnover
-                name = fields[0] or "上证指数"
+                _names = {"sh000001": "上证指数", "sz399001": "深证成指",
+                          "sz399006": "创业板指"}
+                name = fields[0] or _names.get(symbol, symbol)
                 price = float(fields[3])
                 prev = float(fields[2])
                 change = round(price - prev, 2)
                 pct = round(change / prev * 100, 2) if prev else 0
-                results.append({"symbol": "sh000001", "name": name,
+                results.append({"symbol": symbol, "name": name,
                                 "price": price, "prev": prev,
                                 "change": change, "change_pct": pct, "unit": ""})
+                # Accumulate turnover for 两市成交额 (SH + SZ main index)
+                if symbol in ("sh000001", "sz399001"):
+                    total_turnover += float(fields[9])
 
             elif "susdcny" in symbol:
                 # Forex: [0]=time [1]=prev_close ... [5]=price (buy)
@@ -1718,9 +1731,97 @@ def _fetch_macro_indicators() -> list[dict]:
         except (IndexError, ValueError):
             continue
 
-    _MACRO_CACHE = results
-    _MACRO_CACHE_TS = time.time()
+    # Insert 两市成交额 after the three indexes
+    # [claude code] 之前用 min(3, len(results)) 假设三个指数都解析成功；
+    # 但只要任何一个指数 parse 失败（IndexError/ValueError 在 except 里被吞），
+    # results 长度就会 < 3，vol_total 会插到 fx/黄金/原油之间，UI 顺序错乱。
+    # 改为动态查找最后一个指数的位置，紧跟它后面插入 → 不依赖解析全部成功。
+    if total_turnover > 0:
+        vol_yi = round(total_turnover / 1e8, 0)
+        index_symbols = ("sh000001", "sz399001", "sz399006")
+        last_idx_pos = max(
+            (i for i, r in enumerate(results) if r.get("symbol") in index_symbols),
+            default=-1,
+        )
+        results.insert(last_idx_pos + 1, {
+            "symbol": "vol_total", "name": "两市成交",
+            "price": vol_yi, "prev": 0,
+            "change": 0, "change_pct": 0, "unit": "亿",
+            "no_sparkline": True,
+        })
+
+    # 北向资金 (best-effort from East Money)
+    try:
+        nb = _fetch_northbound_flow()
+        if nb:
+            results.append(nb)
+    except Exception:
+        pass
+
+    # [claude code] 只缓存非空结果。若所有解析分支都失败 (results == [])，
+    # 不缓存空列表 → 让下次请求重试，而不是 60 秒内一直显示"暂无数据"。
+    # 网络异常已在上面 return，这里处理"响应到了但解析全失败"的边角情况。
+    if results:
+        _MACRO_CACHE = results
+        _MACRO_CACHE_TS = time.time()
     return results
+
+
+def _fetch_northbound_flow() -> dict | None:
+    """Fetch latest northbound net flow from East Money (best-effort)."""
+    # [claude code] 独立缓存层：北向数据是日频，没必要跟着 60s 主缓存一起刷。
+    # 注意 None 也要算缓存命中（API 偶尔返回空 → 不要每分钟重试）。
+    global _NB_CACHE, _NB_CACHE_TS
+    now = time.time()
+    if (now - _NB_CACHE_TS) <= _NB_CACHE_TTL and _NB_CACHE_TS > 0:
+        return _NB_CACHE
+    url = (
+        "https://datacenter-web.eastmoney.com/api/data/v1/get?"
+        "sortColumns=TRADE_DATE&sortTypes=-1&pageSize=3&pageNumber=1"
+        "&reportName=RPT_MUTUAL_DEAL_HISTORY&columns=ALL&source=WEB&client=WEB"
+    )
+    req = urlrequest.Request(url, headers={
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://data.eastmoney.com",
+    })
+    with urlrequest.urlopen(req, timeout=5) as resp:
+        data = json.loads(resp.read())
+    rows = data.get("result", {}).get("data", []) if data.get("result") else []
+    # Sum 沪股通(001) + 深股通(003) for same date
+    by_date: dict[str, float] = {}
+    for r in rows:
+        dt = (r.get("TRADE_DATE") or "")[:10]
+        net = r.get("NET_DEAL_AMT")
+        if dt and net is not None:
+            by_date[dt] = by_date.get(dt, 0) + net
+    if not by_date:
+        # [claude code] 也缓存 None：避免空响应时每分钟都重试东方财富。
+        _NB_CACHE = None
+        _NB_CACHE_TS = time.time()
+        return None
+    latest_date = max(by_date)
+    # [claude code] 单位假设：东方财富 RPT_MUTUAL_DEAL_HISTORY 的 NET_DEAL_AMT
+    # 字段为"万元"。除以 1e4 → 亿元。这个单位由 EM 报表决定，可能未来变化，
+    # 所以下面加一个合理性 sanity check（北向单日净流入历史最大约 ±300 亿，
+    # 留 10x 安全余量）。如果换了报表名(reportName)，必须重新核对单位。
+    net_yi = round(by_date[latest_date] / 1e4, 2)  # 万元 → 亿元
+    if abs(net_yi) > 5000:
+        # 远超历史范围 → 单位假设可能已失效，宁可不显示也不显示错误数字
+        return None
+    # [claude code] 北向是"特殊 chip"：price 字段直接表示净流入额（亿元），
+    # 没有 prev/change 这种日内涨跌的概念。前端凭 symbol == "northbound"
+    # 走特殊渲染路径，所以 change/change_pct 必须为 0，避免未来其他 consumer
+    # （CSV 导出、API 集成）把 change 误读成"涨跌额"。
+    result = {
+        "symbol": "northbound", "name": "北向资金",
+        "price": net_yi, "prev": 0,
+        "change": 0, "change_pct": 0,
+        "unit": "亿", "date": latest_date,
+        "no_sparkline": True,
+    }
+    _NB_CACHE = result
+    _NB_CACHE_TS = time.time()
+    return result
 
 
 @app.route("/api/macro", methods=["GET"])
@@ -1736,6 +1837,8 @@ _MACRO_HISTORY_TTL = 3600  # 1 hour
 
 _MACRO_SYMBOL_MAP = {
     "sh000001": "sh000001",
+    "sz399001": "sz399001",
+    "sz399006": "sz399006",
     "fx_susdcny": "fx_susdcny",
     "hf_GC": "hf_GC",
     "hf_CL": "hf_CL",
@@ -1752,11 +1855,11 @@ def _fetch_macro_history(symbol: str, days: int = 20) -> list[float]:
 
     closes: list[float] = []
     try:
-        if symbol == "sh000001":
-            # Shanghai index: use Sina K-line (same as stock history)
+        if symbol in ("sh000001", "sz399001", "sz399006"):
+            # Index: use Sina K-line (same as stock history)
             api = (
                 f"{cfg.SINA_KLINE_API_URL}"
-                f"?symbol=sh000001&scale=240&ma=no&datalen={days}"
+                f"?symbol={symbol}&scale=240&ma=no&datalen={days}"
             )
             req = urlrequest.Request(api, headers={"User-Agent": "Mozilla/5.0"})
             with urlrequest.urlopen(req, timeout=cfg.SINA_KLINE_TIMEOUT) as resp:

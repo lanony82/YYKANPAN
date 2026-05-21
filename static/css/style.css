@@ -276,6 +276,40 @@ header {
 .insight-card.full-row {
   grid-column: 1 / -1;
 }
+
+/* [claude code] Beginner mode: simplify the dashboard for first-time users.
+   Default surface = 行情概览 + 参谋信号 + 决策日志 + 我的持仓.
+   Power-user controls (drag/pin/close/hide-all/fold-all/layout selector) are
+   suppressed so newbies can't accidentally hide their core tools. */
+body.beginner-mode .insight-card { display: none; }
+body.beginner-mode .insight-card[data-card-id="stats"],
+body.beginner-mode .insight-card[data-card-id="advisor"],
+body.beginner-mode .insight-card[data-card-id="decisions"] {
+  display: block;
+}
+body.beginner-mode .col-layout,
+body.beginner-mode .layout-bar > .lbl,
+body.beginner-mode #btn-fold-toggle,
+body.beginner-mode #btn-hide-all,
+body.beginner-mode .restore-bar,
+body.beginner-mode .drag-handle,
+body.beginner-mode .card-pin,
+body.beginner-mode .card-close,
+body.beginner-mode .card-collapse {
+  display: none !important;
+}
+body.beginner-mode .insight-card[draggable] { cursor: default; }
+.mode-btn { width: auto !important; padding: 0 8px; font-size: .78rem !important; }
+body.beginner-mode .mode-btn {
+  background: var(--accent); color: #fff; border-color: var(--accent);
+}
+.beginner-banner {
+  display: none;
+  padding: 6px 28px; font-size: .78rem; color: var(--muted);
+  background: rgba(88,166,255,.06); border-bottom: 1px solid var(--border);
+}
+body.beginner-mode .beginner-banner { display: block; }
+.beginner-banner b { color: var(--accent); }
 .btn-row {
   display: flex;
   gap: 8px;
@@ -468,6 +502,12 @@ header {
 .macro-chip .macro-spark {
   display: block; min-height: 28px; margin-top: 2px;
 }
+.macro-chip-vol .macro-price,
+.macro-chip-nb .macro-price { font-size: 1.1rem; }
+.macro-chip-nb .macro-price.up   { color: var(--up); }
+.macro-chip-nb .macro-price.down { color: var(--down); }
+.macro-chip-nb .macro-price.flat { color: var(--muted); }
+.macro-date { font-size: .65rem; color: var(--muted); margin-left: 4px; }
 .macro-loading { color: var(--muted); font-size: .85rem; }
 .macro-period-tabs {
   display: inline-flex; gap: 2px; margin-left: 10px; vertical-align: middle;
