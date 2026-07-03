@@ -52,8 +52,8 @@ def _wrap_inline(text: str) -> str:
     return text
 
 
-_IMG_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
-_LINK_RE = re.compile(r"(?<!\!)\[([^\]]+)\]\(([^)]+)\)")
+_IMG_RE: re.Pattern[str] = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_LINK_RE: re.Pattern[str] = re.compile(r"(?<!\!)\[([^\]]+)\]\(([^)]+)\)")
 
 
 def markdown_to_wechat_html(md: str, image_resolver=None) -> str:
@@ -66,37 +66,37 @@ def markdown_to_wechat_html(md: str, image_resolver=None) -> str:
     Output is intentionally small and uses inline styles, since the WeChat
     editor strips <style>/<link> on paste.
     """
-    lines = md.splitlines()
+    lines: list[str] = md.splitlines()
     out: list[str] = []
     in_list = False
     in_quote = False
     in_para: list[str] = []
 
-    def _flush_para():
+    def _flush_para() -> None:
         if in_para:
-            joined = " ".join(in_para)
+            joined: str = " ".join(in_para)
             out.append(
                 f'<p style="margin:0 0 12px 0;line-height:1.75;">{joined}</p>'
             )
             in_para.clear()
 
-    def _close_list():
+    def _close_list() -> None:
         nonlocal in_list
         if in_list:
             out.append("</ul>")
             in_list = False
 
-    def _close_quote():
+    def _close_quote() -> None:
         nonlocal in_quote
         if in_quote:
             out.append("</blockquote>")
             in_quote = False
 
     for raw in lines:
-        line = raw.rstrip()
+        line: str = raw.rstrip()
 
         # Image (own paragraph)
-        m_img = _IMG_RE.match(line)
+        m_img: re.Match[str] | None = _IMG_RE.match(line)
         if m_img:
             _flush_para()
             _close_list()
@@ -112,15 +112,15 @@ def markdown_to_wechat_html(md: str, image_resolver=None) -> str:
             continue
 
         # Heading
-        m_h = re.match(r"^(#{1,6})\s+(.*)$", line)
+        m_h: re.Match[str] | None = re.match(r"^(#{1,6})\s+(.*)$", line)
         if m_h:
             _flush_para()
             _close_list()
             _close_quote()
-            level = len(m_h.group(1))
-            inner = _wrap_inline(_esc(m_h.group(2)))
-            size_map = {1: "22px", 2: "19px", 3: "17px"}
-            font_size = size_map.get(level, "16px")
+            level: int = len(m_h.group(1))
+            inner: str = _wrap_inline(_esc(m_h.group(2)))
+            size_map: dict[int, str] = {1: "22px", 2: "19px", 3: "17px"}
+            font_size: str = size_map.get(level, "16px")
             out.append(
                 f'<h{level} style="font-size:{font_size};font-weight:bold;'
                 f'margin:18px 0 10px 0;border-left:4px solid #07c160;'
@@ -132,8 +132,8 @@ def markdown_to_wechat_html(md: str, image_resolver=None) -> str:
         if line.startswith(">"):
             _flush_para()
             _close_list()
-            inner = _wrap_inline(_esc(line[1:].lstrip()))
-            inner = _LINK_RE.sub(
+            inner: str = _wrap_inline(_esc(line[1:].lstrip()))
+            inner: str = _LINK_RE.sub(
                 lambda m: f'<a href="{_esc(m.group(2))}">{_esc(m.group(1))}</a>',
                 inner,
             )
@@ -149,11 +149,11 @@ def markdown_to_wechat_html(md: str, image_resolver=None) -> str:
         _close_quote()
 
         # Bullet list
-        m_li = re.match(r"^[-*]\s+(.*)$", line)
+        m_li: re.Match[str] | None = re.match(r"^[-*]\s+(.*)$", line)
         if m_li:
             _flush_para()
-            inner = _wrap_inline(_esc(m_li.group(1)))
-            inner = _LINK_RE.sub(
+            inner: str = _wrap_inline(_esc(m_li.group(1)))
+            inner: str = _LINK_RE.sub(
                 lambda m: f'<a href="{_esc(m.group(2))}">{_esc(m.group(1))}</a>',
                 inner,
             )
@@ -172,8 +172,8 @@ def markdown_to_wechat_html(md: str, image_resolver=None) -> str:
             continue
 
         # Plain text accumulates into the current paragraph
-        inline = _wrap_inline(_esc(line))
-        inline = _LINK_RE.sub(
+        inline: str = _wrap_inline(_esc(line))
+        inline: str = _LINK_RE.sub(
             lambda m: f'<a href="{_esc(m.group(2))}">{_esc(m.group(1))}</a>',
             inline,
         )
@@ -243,13 +243,13 @@ def send_wecom_bot(webhook: str, title: str, html_path: pathlib.Path,
     if not webhook:
         return {"ok": False, "skipped": True, "reason": "no webhook configured"}
     summary_lines = summary_lines or []
-    md = (
+    md: str = (
         f"📰 **{title}**\n\n"
         f"> 文件：`{html_path.name}`\n"
         + "".join(f"> {ln}\n" for ln in summary_lines)
         + "\n下一步：打开 mp.weixin.qq.com → 新建图文 → 粘贴本地 HTML 内容。"
     )
-    payload = json.dumps({"msgtype": "markdown", "markdown": {"content": md}}).encode("utf-8")
+    payload: bytes = json.dumps({"msgtype": "markdown", "markdown": {"content": md}}).encode("utf-8")
     req = urlrequest.Request(
         webhook,
         data=payload,
@@ -280,29 +280,29 @@ def push_section_to_wechat(
 
     Returns: {ok, html_path, html_size, ping}
     """
-    md_path = wxfile_dir / f"{trade_date}_{section}.md"
+    md_path: pathlib.Path = wxfile_dir / f"{trade_date}_{section}.md"
     if not md_path.exists():
         return {"ok": False, "error": f"missing {md_path}"}
-    md = md_path.read_text(encoding="utf-8")
+    md: str = md_path.read_text(encoding="utf-8")
 
     # Resolve relative image refs to absolute file URIs so the local preview
     # in a browser still shows the embedded chart / wuyun / swan images.
-    img_root = (wxfile_dir).resolve()
+    img_root: pathlib.Path = (wxfile_dir).resolve()
 
     def _resolver(rel: str) -> str:
         if rel.startswith(("http://", "https://", "file://")):
             return rel
-        abs_path = (img_root / rel).resolve()
+        abs_path: pathlib.Path = (img_root / rel).resolve()
         return abs_path.as_uri() if abs_path.exists() else rel
 
-    body = markdown_to_wechat_html(md, image_resolver=_resolver)
-    article_title = title or _extract_title(md) or f"{trade_date} {section}"
-    html = build_wechat_html(article_title, body, trade_date, section)
+    body: str = markdown_to_wechat_html(md, image_resolver=_resolver)
+    article_title: str = title or _extract_title(md) or f"{trade_date} {section}"
+    html: str = build_wechat_html(article_title, body, trade_date, section)
 
-    html_path = wxfile_dir / f"{trade_date}_{section}.html"
+    html_path: pathlib.Path = wxfile_dir / f"{trade_date}_{section}.html"
     html_path.write_text(html, encoding="utf-8")
 
-    ping = {"skipped": True}
+    ping: dict[str, bool] = {"skipped": True}
     if wecom_webhook:
         ping = send_wecom_bot(
             wecom_webhook,
@@ -321,7 +321,7 @@ def push_section_to_wechat(
 
 def _extract_title(md: str) -> str:
     for line in md.splitlines():
-        m = re.match(r"^#\s+(.+?)\s*$", line)
+        m: re.Match[str] | None = re.match(r"^#\s+(.+?)\s*$", line)
         if m:
             return m.group(1)
     return ""
