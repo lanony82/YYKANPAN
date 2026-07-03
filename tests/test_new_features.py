@@ -506,24 +506,31 @@ class TestMacroHistoryEndpoint:
 
 class TestRiskEventsEndpoint:
 
+    @pytest.fixture(autouse=True)
+    def _isolate_module_state(self):
+        # Each risk-events test mutates two server module globals via the
+        # /api/risk-events handler. Snapshot both around every test so state
+        # doesn't leak between tests (or into unrelated suites).
+        saved_stocks = stock_app.STOCKS_CACHE_DATA
+        saved_history = stock_app._RISK_EVENT_HISTORY[:]
+        stock_app._RISK_EVENT_HISTORY.clear()
+        try:
+            yield
+        finally:
+            stock_app.STOCKS_CACHE_DATA = saved_stocks
+            stock_app._RISK_EVENT_HISTORY[:] = saved_history
+
     def test_risk_events_empty(self, client):
         """No events when macro is flat, no stocks loaded, and history cleared."""
         with patch.object(stock_app, "_fetch_macro_indicators", return_value=[
             {"name": "上证指数", "change_pct": 0.5, "price": 3360, "prev": 3340},
         ]), patch.object(stock_app, "_scan_news_events", return_value=[]):
-            saved = stock_app.STOCKS_CACHE_DATA
-            saved_history = stock_app._RISK_EVENT_HISTORY[:]
             stock_app.STOCKS_CACHE_DATA = []
-            stock_app._RISK_EVENT_HISTORY.clear()
-            try:
-                rv = client.get("/api/risk-events")
-                assert rv.status_code == 200
-                data = rv.get_json()
-                assert data["ok"] is True
-                assert data["count"] == 0
-            finally:
-                stock_app.STOCKS_CACHE_DATA = saved
-                stock_app._RISK_EVENT_HISTORY[:] = saved_history
+            rv = client.get("/api/risk-events")
+            assert rv.status_code == 200
+            data = rv.get_json()
+            assert data["ok"] is True
+            assert data["count"] == 0
 
     def test_risk_event_shanghai_crash(self, client):
         """Shanghai index drop >=3% should trigger event."""
@@ -563,13 +570,10 @@ class TestRiskEventsEndpoint:
             stock_app.STOCKS_CACHE_DATA = [
                 {"ticker": "600001.SS", "name": "测试股", "change_pct": -10.0, "price": 9.0},
             ]
-            try:
-                rv = client.get("/api/risk-events")
-                data = rv.get_json()
-                assert data["count"] >= 1
-                assert any("跌停" in e["title"] for e in data["events"])
-            finally:
-                stock_app.STOCKS_CACHE_DATA = []
+            rv = client.get("/api/risk-events")
+            data = rv.get_json()
+            assert data["count"] >= 1
+            assert any("跌停" in e["title"] for e in data["events"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
