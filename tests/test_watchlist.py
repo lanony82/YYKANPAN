@@ -180,3 +180,26 @@ class TestConfigImport:
         export = client.get("/api/config/export").get_json()
         assert len(export["watchlist"]) == 1
         assert export["watchlist"][0]["ticker"] == "C"
+
+
+# ── GET /api/watchlist ──────────────────────────────────────────────────────
+
+class TestWatchlistEndpoint:
+    def test_watchlist_empty(self, client):
+        resp = client.get("/api/watchlist")
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data["ok"] is True
+        assert data["watchlist"] == []
+        assert data["count"] == 0
+
+    def test_watchlist_after_add(self, client):
+        with patch.object(stock_app, "fetch_stock", side_effect=_mock_fetch_stock):
+            client.post("/api/stocks", json={"ticker": "600519.SS", "name": "贵州茅台"})
+
+        resp = client.get("/api/watchlist")
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data["ok"] is True
+        assert data["count"] == 1
+        assert data["watchlist"][0]["ticker"] == "600519.SS"

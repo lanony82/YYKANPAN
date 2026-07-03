@@ -1223,6 +1223,13 @@ def get_stocks():
         row["suggest"] = _generate_stock_suggestion(row)
     return jsonify(rows)
 
+
+@app.route("/api/watchlist", methods=["GET"])
+def get_watchlist():
+    """Return the current watchlist in a stable API shape."""
+    wl = load_watchlist()
+    return jsonify({"ok": True, "watchlist": wl, "count": len(wl)})
+
 @app.route("/api/stocks", methods=["POST"])
 def add_stock():
     body   = request.get_json(force=True)
