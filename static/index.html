@@ -377,25 +377,12 @@
   <div class="insight-card insight-card--wide" data-card-id="decisions" draggable="true">
     <h3><span class="drag-handle">⠇</span> 决策日志 <span class="ai-badge" style="background:rgba(56,139,253,.15);color:#388bfd">Decision Journal</span><button class="card-collapse" title="折叠/展开">−</button><button class="card-close" title="隐藏卡片">✕</button></h3>
 
-    <!-- New decision form (collapsible) -->
-    <details id="decision-form-wrap" class="decision-form-wrap">
+    <!-- New decision form (essentials open by default; advanced collapsed) -->
+    <details id="decision-form-wrap" class="decision-form-wrap" open>
       <summary>＋ 新决策</summary>
       <div class="decision-form">
-        <input id="dec-title" type="text" placeholder="决策标题 *" maxlength="120" />
-        <div class="dec-row">
-          <select id="dec-type">
-            <option value="trade">交易 Trade</option>
-            <option value="life">生活 Life</option>
-            <option value="work">工作 Work</option>
-          </select>
-          <select id="dec-state">
-            <option value="idea">💡 想法</option>
-            <option value="decided">✅ 已决</option>
-            <option value="acted">🚀 已执行</option>
-            <option value="reviewed">📝 已复盘</option>
-          </select>
-        </div>
-        <!-- Trade-specific fields -->
+        <input id="dec-title" type="text" placeholder="决策标题 *（如：买入贵州茅台）" maxlength="120" />
+        <!-- Trade-specific fields (essentials) -->
         <div id="dec-trade-fields" class="dec-trade-fields">
           <div class="dec-row">
             <select id="dec-trade-action">
@@ -408,18 +395,34 @@
           </div>
           <div class="dec-row">
             <input id="dec-price" type="number" step="0.01" placeholder="价格" />
-            <input id="dec-size" type="number" step="100" placeholder="股数" />
+            <input id="dec-stoploss" type="number" step="0.01" placeholder="止损价" />
+          </div>
+        </div>
+        <details class="dec-more-wrap">
+          <summary>更多字段（类型/状态/股数/止盈/信心/备注/标签）</summary>
+          <div class="dec-row">
+            <select id="dec-type">
+              <option value="trade">交易 Trade</option>
+              <option value="life">生活 Life</option>
+              <option value="work">工作 Work</option>
+            </select>
+            <select id="dec-state">
+              <option value="idea">💡 想法</option>
+              <option value="decided">✅ 已决</option>
+              <option value="acted">🚀 已执行</option>
+              <option value="reviewed">📝 已复盘</option>
+            </select>
           </div>
           <div class="dec-row">
-            <input id="dec-stoploss" type="number" step="0.01" placeholder="止损价" />
+            <input id="dec-size" type="number" step="100" placeholder="股数" />
             <input id="dec-takeprofit" type="number" step="0.01" placeholder="止盈价" />
             <input id="dec-confidence" type="number" step="0.1" min="0" max="1" placeholder="信心 0~1" />
           </div>
-        </div>
-        <textarea id="dec-context" placeholder="当时环境（价格/市场/情绪）" rows="2"></textarea>
-        <textarea id="dec-action" placeholder="做了什么 / 打算做什么" rows="2"></textarea>
-        <textarea id="dec-outcome" placeholder="结果（可后续补充）" rows="2"></textarea>
-        <input id="dec-tags" type="text" placeholder="标签 用逗号分隔 (breakout, fomo, revenge…)" />
+          <textarea id="dec-context" placeholder="当时环境（价格/市场/情绪）" rows="2"></textarea>
+          <textarea id="dec-action" placeholder="做了什么 / 打算做什么" rows="2"></textarea>
+          <textarea id="dec-outcome" placeholder="结果（可后续补充）" rows="2"></textarea>
+          <input id="dec-tags" type="text" placeholder="标签 用逗号分隔 (breakout, fomo, revenge…)" />
+        </details>
         <div class="dec-actions">
           <button id="btn-dec-save">💾 保存</button>
           <span id="dec-msg"></span>

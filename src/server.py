@@ -19,7 +19,7 @@ import threading
 from datetime import datetime, timedelta
 from urllib import request as urlrequest
 from urllib import parse as urlparse
-from config import cfg, load_watchlist, save_watchlist, DEFAULT_STOCKS
+from config import cfg, load_watchlist, save_watchlist
 from time_utils import BeijingTime
 from data.providers import (
     fetch_stock_yahoo as _fetch_stock_yahoo,
@@ -27,7 +27,6 @@ from data.providers import (
     fetch_stock_sina as _fetch_stock_sina,
     is_a_share_ticker as _is_a_share_ticker,
     with_retries as _with_retries,
-    _ticker_to_a_share_code,
     _ticker_to_sina_symbol,
     _fetch_52w,
 )
@@ -228,16 +227,26 @@ _CSV_FIELDS = [
     "volume", "market_cap", "high52", "low52", "date", "source", "error",
 ]
 _CSV_KEEP_DAYS = 5
+_WXFILE_KEEP_DAYS = 5
+
+
+def _is_cn_trading_day(dt=None) -> bool:
+    """True when the given Beijing date is a weekday and not a holiday.
+
+    Date-only check (no market-hours window). Used to gate jobs that should
+    skip on weekends and Chinese public holidays.
+    """
+    now = dt or _bj_now()
+    if now.weekday() >= 5:
+        return False
+    return now.strftime("%Y-%m-%d") not in _CN_HOLIDAYS_2026
 
 
 def _is_cn_trading_session() -> bool:
     """True when Beijing time is within A-share continuous trading window
     on a trading day (weekday + non-holiday), roughly 09:15–15:30 UTC+8."""
     now = _bj_now()
-    dow = now.weekday()  # Mon=0 .. Sun=6
-    if dow >= 5:
-        return False
-    if now.strftime("%Y-%m-%d") in _CN_HOLIDAYS_2026:
+    if not _is_cn_trading_day(now):
         return False
     minutes = now.hour * 60 + now.minute
     return (9 * 60 + 15) <= minutes <= (15 * 60 + 30)
@@ -307,6 +316,46 @@ def _load_latest_csv() -> list[dict] | None:
         return rows if rows else None
     except Exception:
         return None
+
+
+def _prune_wxfile_history(base_dir: pathlib.Path, keep_days: int = _WXFILE_KEEP_DAYS) -> None:
+    """Keep wxfile artifacts for latest N dates only.
+
+    Applies to files in `base_dir` (e.g. .md/.html) and `base_dir/img`
+    where filenames are prefixed with YYYY-MM-DD_.
+    """
+    try:
+        if keep_days <= 0 or not base_dir.exists():
+            return
+        date_re = re.compile(r"^(\d{4}-\d{2}-\d{2})_")
+        
+        # Collect files from base_dir and img/ that match date prefix
+        base_files = [p for p in base_dir.glob("*") if p.is_file() and date_re.match(p.name)]
+        img_dir = base_dir / "img"
+        img_files = [p for p in img_dir.glob("*") if p.is_file() and date_re.match(p.name)] if img_dir.exists() else []
+        all_dated_files = base_files + img_files
+
+        # Extract unique dates and keep only the N most recent
+        dates = sorted(
+            {date_re.match(p.name).group(1) for p in all_dated_files},
+            reverse=True,
+        )
+        keep_dates = set(dates[:keep_days])
+        
+        # Delete files not in keep_dates
+        deleted_count = 0
+        for p in all_dated_files:
+            m = date_re.match(p.name)
+            if m and m.group(1) not in keep_dates:
+                p.unlink(missing_ok=True)
+                deleted_count += 1
+        
+        if deleted_count > 0:
+            import logging
+            logging.info(f"wxfile cleanup: kept {len(keep_dates)} dates, deleted {deleted_count} files")
+    except Exception as e:
+        import logging
+        logging.error(f"wxfile cleanup failed: {e}", exc_info=True)
 
 
 def _invalidate_stocks_cache() -> None:
@@ -2420,6 +2469,747 @@ def xingu_xinzhai():
     return jsonify(_fetch_xingu_xinzhai())
 
 
+# ── Daily content drafting (公众号日更草稿) ───────────────────────────────────
+
+_DAILY_POST_DISCLAIMER = (
+    "风险提示与免责声明：本文仅为个人交易复盘与系统功能记录，不构成任何投资建议、"
+    "收益承诺或个性化投顾服务。文中观点与信息仅供交流参考，可能存在滞后或误差，"
+    "不作为买卖依据。市场有风险，决策需谨慎，所有交易后果由投资者自行承担。"
+)
+
+_DAILY_POST_ORIGINAL_NOTE = (
+    "原创说明：本文为作者基于公开市场数据与个人交易复盘形成的原创内容，"
+    "部分内容由本地系统辅助生成并经人工审校。"
+)
+
+# Stable PD/CC0 fallbacks on Wikimedia Commons (verified). Used when the
+# Commons search API is unreachable or returns no public-domain hit.
+_WX_IMAGE_FALLBACK_INTRADAY = (
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/"
+    "2022_Dow_Jones_Industrial_Average_and_S%26P_500.png/"
+    "1280px-2022_Dow_Jones_Industrial_Average_and_S%26P_500.png"
+)
+_WX_IMAGE_FALLBACK_WUYUN = (
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/2/26/"
+    "5-Elemente_1.svg/1024px-5-Elemente_1.svg.png"
+)
+_WX_IMAGE_FALLBACK_SWAN = (
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/5/54/"
+    "Cygnus_atratus_The_black_swan_%2853556469936%29.jpg/"
+    "1280px-Cygnus_atratus_The_black_swan_%2853556469936%29.jpg"
+)
+
+
+def _fetch_pd_image(query: str, dest: pathlib.Path, fallback_url: str) -> bool:
+    """Fetch a public-domain image from Wikimedia Commons and save to dest.
+
+    Caches by file existence — skips network if dest already exists.
+    Falls back to a hand-picked PD URL if the Commons search fails.
+    Returns True on success, False if no image could be saved.
+    """
+    if dest.exists() and dest.stat().st_size > 0:
+        return True
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    api = (
+        "https://commons.wikimedia.org/w/api.php?action=query&format=json"
+        "&generator=search&gsrsearch="
+        + urlparse.quote(f"{query} haswbstatement:P6216=Q19652")
+        + "&gsrnamespace=6&gsrlimit=5&prop=imageinfo"
+        "&iiprop=url%7Cextmetadata&iiurlwidth=1024"
+    )
+    chosen = ""
+    try:
+        req = urlrequest.Request(api, headers={"User-Agent": "FUN-wxfile/1.0"})
+        with urlrequest.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        pages = (data.get("query") or {}).get("pages") or {}
+        for p in pages.values():
+            ii = (p.get("imageinfo") or [{}])[0]
+            url = ii.get("thumburl") or ""
+            if url.lower().endswith((".png", ".jpg", ".jpeg")):
+                chosen = url
+                break
+    except Exception as e:
+        logging.warning("wxfile PD search failed for %r: %s", query, e)
+    if not chosen:
+        chosen = fallback_url
+    try:
+        req = urlrequest.Request(chosen, headers={"User-Agent": "FUN-wxfile/1.0"})
+        with urlrequest.urlopen(req, timeout=15) as resp:
+            dest.write_bytes(resp.read())
+        return True
+    except Exception as e:
+        logging.warning("wxfile PD download failed (%s): %s", chosen, e)
+        return False
+
+
+def _wuyun_liuqi_for_date(date_str: str) -> dict:
+    """Return a coarse 五运六气 reading for a given YYYY-MM-DD.
+
+    This is a simplified static mapping (年干支 → 岁运/司天/在泉) — sufficient
+    for an editorial sidebar, not for medical/divinatory use. Falls back to
+    sensible defaults when parsing fails.
+    """
+    try:
+        y = int(date_str[:4])
+        m = int(date_str[5:7])
+        d = int(date_str[8:10])
+    except Exception:
+        y, m, d = 2026, 1, 1
+    stems = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
+    branches = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
+    stem = stems[(y - 4) % 10]
+    branch = branches[(y - 4) % 12]
+    yun_map = {
+        "甲": "土运太过", "己": "土运不及",
+        "乙": "金运不及", "庚": "金运太过",
+        "丙": "水运太过", "辛": "水运不及",
+        "丁": "木运不及", "壬": "木运太过",
+        "戊": "火运太过", "癸": "火运不及",
+    }
+    sitian_map = {
+        "子": "少阴君火", "午": "少阴君火",
+        "丑": "太阴湿土", "未": "太阴湿土",
+        "寅": "少阳相火", "申": "少阳相火",
+        "卯": "阳明燥金", "酉": "阳明燥金",
+        "辰": "太阳寒水", "戌": "太阳寒水",
+        "巳": "厥阴风木", "亥": "厥阴风木",
+    }
+    zaiquan_map = {
+        "少阴君火": "阳明燥金", "阳明燥金": "少阴君火",
+        "太阴湿土": "太阳寒水", "太阳寒水": "太阴湿土",
+        "少阳相火": "厥阴风木", "厥阴风木": "少阳相火",
+    }
+    sitian = sitian_map.get(branch, "未知")
+    zaiquan = zaiquan_map.get(sitian, "未知")
+    # 主气 by 节气区间 (six 60-day windows starting 大寒)
+    md = m * 100 + d
+    if md < 321:
+        zhuqi = "厥阴风木"
+    elif md < 521:
+        zhuqi = "少阴君火"
+    elif md < 723:
+        zhuqi = "少阳相火"
+    elif md < 923:
+        zhuqi = "太阴湿土"
+    elif md < 1122:
+        zhuqi = "阳明燥金"
+    else:
+        zhuqi = "太阳寒水"
+    return {
+        "year_ganzhi": f"{stem}{branch}年",
+        "yun": yun_map.get(stem, "未知"),
+        "sitian": sitian,
+        "zaiquan": zaiquan,
+        "zhuqi": zhuqi,
+    }
+
+
+def _collect_closing_news(trade_date: str, limit: int = 6) -> dict:
+    """Collect today/yesterday news for the closing wxfile section.
+
+    Returns:
+        {
+            "risk_events": [{type, severity, title, time}],  # 黑天鹅/灰犀牛
+            "cctv": [{date, title}],                          # plain headlines
+        }
+    Best-effort: any source that fails returns []. Never raises.
+    """
+    out = {"risk_events": [], "cctv": []}
+
+    # 1) Risk events from in-memory history, filtered to last 2 days.
+    try:
+        cutoff = (_bj_now() - timedelta(days=2)).strftime("%Y-%m-%d %H:%M")
+        rs = [e for e in _RISK_EVENT_HISTORY if (e.get("time") or "") >= cutoff]
+        rs.sort(key=lambda e: (
+            {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(e.get("severity", "low"), 9),
+            e.get("time", ""),
+        ))
+        # Prefer 黑天鹅 first, then 灰犀牛
+        rs.sort(key=lambda e: 0 if e.get("type") == "黑天鹅" else 1)
+        out["risk_events"] = rs[:limit]
+    except Exception as e:
+        logging.warning("wxfile risk_events collect failed: %s", e)
+
+    # 2) CCTV headlines for date + previous day. Cheap; akshare returns DataFrame.
+    if ak is not None:
+        try:
+            seen: set[str] = set()
+            for offset in (0, 1):
+                d = (
+                    datetime.strptime(trade_date, "%Y-%m-%d")
+                    if re.match(r"^\d{4}-\d{2}-\d{2}$", trade_date or "")
+                    else _bj_now()
+                ) - timedelta(days=offset)
+                yyyymmdd = d.strftime("%Y%m%d")
+                try:
+                    df = _with_retries(lambda dt=yyyymmdd: ak.news_cctv(date=dt))
+                except Exception:
+                    continue
+                if df is None or df.empty:
+                    continue
+                for _, row in df.head(20).iterrows():
+                    title = str(row.get("title") or "").strip()
+                    if not title or title in seen:
+                        continue
+                    seen.add(title)
+                    out["cctv"].append({"date": yyyymmdd, "title": title})
+                    if len(out["cctv"]) >= limit:
+                        break
+                if len(out["cctv"]) >= limit:
+                    break
+        except Exception as e:
+            logging.warning("wxfile cctv collect failed: %s", e)
+
+    return out
+
+
+def _build_daily_wechat_article(payload: dict) -> dict:
+    """Build a publish-ready daily article using system outputs.
+
+    The article is educational/review-oriented and intentionally includes
+    a fixed disclaimer to avoid investment-advice liability.
+    """
+    trade_date = (payload.get("trade_date") or _bj_date_str()).strip()
+    custom_title = (payload.get("title") or "").strip()
+    include_disclaimer = payload.get("include_disclaimer", True)
+    include_original_note = payload.get("include_original_note", True)
+    include_card_collections = payload.get("include_card_collections", True)
+    save_to_file = payload.get("save_to_file", True)
+    output_dir = (payload.get("output_dir") or "wxfile").strip() or "wxfile"
+
+    brief = _build_auto_brief()
+    ai = _build_ai_edge_report()
+    sentiment = _load_sentiment_history()
+    sentiment_last = sentiment[-1] if sentiment else {}
+    limit_stats = _get_limit_stats()
+    decision_stats = dec.analyze(dtype="trade")
+    loss_patterns = dec.detect_loss_patterns()
+    macro_list = _fetch_macro_indicators()
+
+    regime = brief.get("snapshot", {}).get("regime", "震荡")
+    snapshot = brief.get("snapshot", {})
+    avg_change = brief.get("snapshot", {}).get("avg_change_pct")
+    sentiment_score = sentiment_last.get("score")
+    sentiment_up_ratio = sentiment_last.get("up_ratio")
+    confidence = ai.get("summary", {}).get("confidence", 50.0)
+    ai_summary = ai.get("summary", {})
+    stage = sentiment_last.get("stage", "分歧")
+    limit_up = limit_stats.get("limit_up")
+    limit_down = limit_stats.get("limit_down")
+    yday_limit_perf = limit_stats.get("yesterday_limit_up_performance") or {}
+
+    macro_map = {
+        m.get("symbol"): m for m in macro_list
+        if isinstance(m, dict) and m.get("symbol")
+    }
+
+    vol_total = macro_map.get("vol_total", {}).get("price")
+    northbound = macro_map.get("northbound", {}).get("price")
+    vol_text = f"{vol_total}亿" if vol_total is not None else "暂无"
+    nb_text = f"{northbound}亿" if northbound is not None else "暂无"
+    lu_text = str(limit_up) if limit_up is not None else "暂无"
+    ld_text = str(limit_down) if limit_down is not None else "暂无"
+
+    # Carry forward yesterday's constraint into today's opening
+    next_day_rule = (loss_patterns or {}).get("next_day_rule", "")
+
+    opening_lines = []
+    if next_day_rule:
+        opening_lines.append(f"⚠️ 今日执行约束（来自昨日复盘）：{next_day_rule}")
+    opening_lines.extend([
+        f"市场温度：{regime}，情绪阶段：{stage}。",
+        "开盘前先定边界，再看机会：先控制回撤，再讨论进攻。",
+    ])
+    if avg_change is not None:
+        opening_lines.append(f"样本平均涨跌幅：{avg_change}%（仅作市场温度参考）。")
+    if snapshot.get("valid") is not None and snapshot.get("total") is not None:
+        opening_lines.append(f"样本覆盖：{snapshot.get('valid')}/{snapshot.get('total')}（有效/总数）。")
+    if include_card_collections and sentiment_score is not None:
+        opening_lines.append(f"情绪分值：{sentiment_score}（up_ratio={sentiment_up_ratio}）。")
+    if include_card_collections:
+        sh = macro_map.get("sh000001")
+        sz = macro_map.get("sz399001")
+        if sh and sz:
+            opening_lines.append(
+                f"指数卡片：上证 {sh.get('price')} ({sh.get('change_pct')}%)，"
+                f"深证 {sz.get('price')} ({sz.get('change_pct')}%)。"
+            )
+
+    playbook = ai.get("playbook") or []
+    intraday_lines = [
+        f"盘中核心看板：两市成交额 {vol_text}，北向资金 {nb_text}，涨停/跌停 {lu_text}/{ld_text}。",
+        f"盘中执行以纪律优先，当前系统信心参考：{round(float(confidence), 1)}。",
+        "信号用于校验思路，不替代个人下单判断。",
+    ]
+    if playbook:
+        intraday_lines.append(f"盘中观察要点：{'; '.join(playbook[:2])}")
+    if include_card_collections:
+        intraday_lines.append(
+            f"AI卡片：bias={ai_summary.get('market_bias', '未知')}，"
+            f"up/down={ai_summary.get('up_count', 0)}/{ai_summary.get('down_count', 0)}，"
+            f"coverage={ai_summary.get('coverage', 0)}。"
+        )
+    if include_card_collections and limit_up is not None and limit_down is not None:
+        intraday_lines.append(f"涨停跌停卡片：{limit_up}/{limit_down}。")
+
+    closing_lines = []
+    top_pattern = loss_patterns.get("top_pattern") if isinstance(loss_patterns, dict) else None
+    closing_next_day_rule = (loss_patterns or {}).get("next_day_rule")
+    if top_pattern:
+        closing_lines.append(f"模式识别：{top_pattern.get('label', '')}。")
+    if closing_next_day_rule:
+        closing_lines.append(f"明日改进：{closing_next_day_rule}")
+    closing_lines.extend([
+        "盘后复盘先看过程再看结果：是否按计划执行、是否触发风控。",
+        f"决策日志累计：{decision_stats.get('total', 0)} 条，已识别行为模式 {len(decision_stats.get('patterns', []))} 项。",
+    ])
+    if limit_up is not None and limit_down is not None:
+        closing_lines.append(f"涨停/跌停家数：{limit_up}/{limit_down}，用于判断短线环境冷热。")
+    if include_card_collections and yday_limit_perf:
+        closing_lines.append(
+            f"昨日涨停表现卡片：成功率 {yday_limit_perf.get('profit_rate', 0)}%，"
+            f"均值 {yday_limit_perf.get('avg_change_pct', 0)}%，"
+            f"结论：{yday_limit_perf.get('verdict', '暂无')}。"
+        )
+    if include_card_collections:
+        by_source = decision_stats.get("by_source") or {}
+        if by_source:
+            source_text = ", ".join(f"{k}:{v}" for k, v in by_source.items())
+            closing_lines.append(f"决策来源卡片：{source_text}。")
+
+    title = custom_title or f"{trade_date} 交易日复盘：开盘-盘中-盘后决策日志"
+    opening_text = "\n".join(f"- {line}" for line in opening_lines)
+    intraday_text = "\n".join(f"- {line}" for line in intraday_lines)
+    closing_text = "\n".join(f"- {line}" for line in closing_lines)
+
+    parts = [
+        f"# {title}",
+        "",
+        "今日继续执行“决策优先于预测”的框架，目标是提升决策一致性，而非追求短线猜顶猜底。",
+        "",
+        "## 一、开盘前（计划）",
+        opening_text,
+        "",
+        "## 二、盘中（执行）",
+        intraday_text,
+        "",
+        "## 三、盘后（复盘）",
+        closing_text,
+        "",
+        "今日一句话：行情可以不确定，但纪律必须确定。",
+    ]
+    if include_disclaimer:
+        parts.extend(["", "## 风险提示与免责声明", _DAILY_POST_DISCLAIMER])
+    if include_original_note:
+        parts.extend(["", "## 原创说明", _DAILY_POST_ORIGINAL_NOTE])
+
+    result = {
+        "ok": True,
+        "article": {
+            "date": trade_date,
+            "title": title,
+            "sections": {
+                "opening": opening_lines,
+                "intraday": intraday_lines,
+                "closing": closing_lines,
+            },
+            "disclaimer": _DAILY_POST_DISCLAIMER if include_disclaimer else "",
+            "original_note": _DAILY_POST_ORIGINAL_NOTE if include_original_note else "",
+            "content_markdown": "\n".join(parts),
+        },
+    }
+
+    if save_to_file:
+        base_dir = cfg.DATA_DIR / output_dir
+        base_dir.mkdir(parents=True, exist_ok=True)
+        safe_date = re.sub(r"[^0-9\-]", "", trade_date) or _bj_date_str()
+        file_map = {
+            "opening": base_dir / f"{safe_date}_opening.md",
+            "intraday": base_dir / f"{safe_date}_intraday.md",
+            "closing": base_dir / f"{safe_date}_closing.md",
+        }
+        # Optional filter: only write listed sections (used by the daily scheduler
+        # so an 8:30 run doesn't overwrite the closing file with morning data).
+        wanted = payload.get("sections")
+        if wanted:
+            allowed = {s.strip() for s in wanted} if isinstance(wanted, (list, tuple, set)) else set()
+            file_map = {k: v for k, v in file_map.items() if k in allowed}
+        section_titles = {
+            "opening": "一、开盘前（计划）",
+            "intraday": "二、盘中（执行）",
+            "closing": "三、盘后（复盘）",
+        }
+        section_stages = {
+            "opening": "计划",
+            "intraday": "执行",
+            "closing": "复盘",
+        }
+
+        img_dir = base_dir / "img"
+        wuyun = _wuyun_liuqi_for_date(safe_date)
+        # Auto-fetch PD images per date (cached by file existence).
+        intraday_img_rel = ""
+        if _fetch_pd_image(
+            "zen meditation mist mountains minimal landscape",
+            img_dir / f"{safe_date}_chart.png",
+            _WX_IMAGE_FALLBACK_INTRADAY,
+        ):
+            intraday_img_rel = f"img/{safe_date}_chart.png"
+        wuyun_img_rel = ""
+        if _fetch_pd_image(
+            "zen meditation mist mountains minimal landscape",
+            img_dir / f"{safe_date}_wuyun.png",
+            _WX_IMAGE_FALLBACK_WUYUN,
+        ):
+            wuyun_img_rel = f"img/{safe_date}_wuyun.png"
+        swan_img_rel = ""
+        if _fetch_pd_image(
+            "zen meditation mist mountains minimal landscape",
+            img_dir / f"{safe_date}_swan.jpg",
+            _WX_IMAGE_FALLBACK_SWAN,
+        ):
+            swan_img_rel = f"img/{safe_date}_swan.jpg"
+        closing_news = _collect_closing_news(safe_date, limit=6)
+
+        saved_files = []
+        for section, fpath in file_map.items():
+            meta_lines = [
+                f"> **日期**：{safe_date}　**段落**：{section_stages[section]}",
+                f"> **市场温度**：{regime}　**情绪阶段**：{stage}",
+                f"> **盘中看板**：成交额 {vol_text} · 北向 {nb_text} · 涨跌停 {lu_text}/{ld_text}",
+            ]
+            lines = [
+                f"# {title}",
+                "",
+                *meta_lines,
+                "",
+                f"## {section_titles[section]}",
+                "\n".join(f"- {line}" for line in result["article"]["sections"][section]),
+            ]
+            if section == "opening":
+                wy_lines = ["", "## 五运六气参考（仅作传统文化视角）"]
+                if wuyun_img_rel:
+                    wy_lines += [
+                        "",
+                        f"![空灵冥想意象图]({wuyun_img_rel})",
+                        "",
+                        "*配图说明：交易纪律/冥想（空灵）主题意象配图，来源 Wikimedia Commons，公有领域 (Public Domain)。*",
+                    ]
+                wy_lines += [
+                    "",
+                    f"- 干支：{safe_date[:4]} 年为 **{wuyun['year_ganzhi']}**，"
+                    f"岁运 **{wuyun['yun']}**，司天 **{wuyun['sitian']}**，在泉 **{wuyun['zaiquan']}**。",
+                    f"- 当令主气：**{wuyun['zhuqi']}**，对应当下节气区间。",
+                    "- 传统视角仅作「天人对应」类趣味参考，不构成行情预测或投资依据。",
+                    "- 交易仍以纪律、仓位与系统信号为准。",
+                ]
+                lines.extend(wy_lines)
+            if section == "closing":
+                cn_lines = ["", "## 今日要闻与风险事件（黑天鹅 / 灰犀牛）"]
+                if swan_img_rel:
+                    cn_lines += [
+                        "",
+                        f"![空灵冥想意象图]({swan_img_rel})",
+                        "",
+                        "*配图说明：交易纪律/冥想（空灵）主题意象配图，来源 Wikimedia Commons，公有领域 (Public Domain)。*",
+                    ]
+                risks = closing_news.get("risk_events") or []
+                if risks:
+                    cn_lines += ["", "**自动检测到的风险事件**："]
+                    for ev in risks:
+                        sev_tag = {"critical": "🔴", "high": "🟠", "medium": "🟡"}.get(
+                            ev.get("severity", ""), "⚪"
+                        )
+                        cn_lines.append(
+                            f"- {sev_tag} **[{ev.get('type','事件')}]** "
+                            f"{ev.get('title','')}（{ev.get('time','')}）"
+                        )
+                else:
+                    cn_lines += ["", "- 今日系统未自动捕获到达到黑天鹅 / 灰犀牛阈值的事件。"]
+                cctv = closing_news.get("cctv") or []
+                if cctv:
+                    cn_lines += ["", "**今日宏观/政策头条（CCTV）**："]
+                    for n in cctv:
+                        cn_lines.append(f"- {n.get('title','')}")
+                cn_lines += [
+                    "",
+                    "*提示：黑天鹅 = 极小概率高冲击事件；灰犀牛 = 已知但被忽视的高概率风险。两者均不构成预测，仅作风险提醒。*",
+                ]
+                lines.extend(cn_lines)
+            if section == "intraday":
+                pn_lines = ["", "## 盘中打油诗"]
+                if intraday_img_rel:
+                    pn_lines += [
+                        "",
+                        f"![空灵冥想意象图]({intraday_img_rel})",
+                        "",
+                        "*配图说明：交易纪律/冥想（空灵）主题意象配图，来源 Wikimedia Commons，公有领域 (Public Domain)。*",
+                    ]
+                avg_pct = avg_change if avg_change is not None else 0
+                bias_word = "偏多" if (sentiment_up_ratio or 0) > 0.5 else "偏空"
+                pn_lines += [
+                    "",
+                    f"> 成交{vol_text}量能稳，{regime}格局未翻盘。",
+                    f"> 涨停{lu_text}跌停{ld_text}，情绪{bias_word}盘略乱。",
+                    f"> 信心{round(float(confidence),0):.0f}莫追高，纪律先行最重要。",
+                    f"> 平均涨跌{avg_pct}%，观察三笔不再敲。",
+                ]
+                lines.extend(pn_lines)
+            if include_disclaimer:
+                lines.extend(["", "## 风险提示与免责声明", _DAILY_POST_DISCLAIMER])
+            if include_original_note:
+                lines.extend(["", "## 原创说明", _DAILY_POST_ORIGINAL_NOTE])
+            fpath.write_text("\n".join(lines), encoding="utf-8")
+            saved_files.append({
+                "section": section,
+                "path": str(fpath),
+                "relative": (pathlib.Path("data") / output_dir / fpath.name).as_posix(),
+            })
+
+        result["saved"] = {
+            "ok": True,
+            "mode": "3-files-per-day",
+            "files": saved_files,
+        }
+        _prune_wxfile_history(base_dir, _WXFILE_KEEP_DAYS)
+
+    return result
+
+
+@app.route("/api/content/daily-article", methods=["POST"])
+def daily_article_api():
+    """Generate a publish-ready daily WeChat article draft."""
+    payload = request.get_json(silent=True) or {}
+    return jsonify(_build_daily_wechat_article(payload))
+
+
+# ── WeChat Official Account: half-automated push ─────────────────────────────
+
+
+from integrations import wechat_oa as wx_oa  # noqa: E402
+
+
+def _push_wxfile_to_wechat(trade_date: str, section: str, output_dir: str = "wxfile") -> dict:
+    """Render a wxfile section to HTML next to the .md, optionally ping WeCom bot."""
+    wxfile_dir = cfg.DATA_DIR / output_dir
+    summary_lines: list[str] = []
+    md_path = wxfile_dir / f"{trade_date}_{section}.md"
+    if md_path.exists():
+        # Pull a couple of headline bullets to embed in the WeCom ping body
+        bullets = [
+            ln.strip("- ").strip()
+            for ln in md_path.read_text(encoding="utf-8").splitlines()
+            if ln.startswith("- ")
+        ][:3]
+        summary_lines = [b[:80] for b in bullets if b]
+    return wx_oa.push_section_to_wechat(
+        wxfile_dir=wxfile_dir,
+        trade_date=trade_date,
+        section=section,
+        summary_lines=summary_lines,
+        wecom_webhook=wx_oa.get_wecom_webhook(),
+    )
+
+
+@app.route("/api/content/wechat/push/<trade_date>/<section>", methods=["POST"])
+def wechat_push_section(trade_date, section):
+    section = (section or "").strip().lower()
+    if section not in {"opening", "intraday", "closing"}:
+        return jsonify({"ok": False, "error": "section must be opening|intraday|closing"}), 400
+    safe_date = re.sub(r"[^0-9\-]", "", trade_date) or _bj_date_str()
+    return jsonify(_push_wxfile_to_wechat(safe_date, section))
+
+
+# ── Daily wxfile scheduler (writes opening/intraday/closing at fixed times) ──
+#
+# Three runs per Beijing trading day:
+#   08:30 → opening    (pre-market plan)
+#   12:30 → intraday   (mid-session execution snapshot)
+#   16:00 → closing    (post-close review)
+#
+# A guard set keeps each (date, section) pair from running more than once per day,
+# so a missed minute (sleep, suspended laptop) still triggers the run on the next
+# tick after the scheduled time, but doesn't re-run after a successful write.
+
+_WX_SCHEDULE = [
+    ("opening", 8, 30),
+    ("intraday", 12, 30),
+    ("closing", 16, 0),
+]
+_WX_RAN: set[tuple[str, str]] = set()  # {(YYYY-MM-DD, section), ...}
+_WX_SCHEDULER_STARTED = False
+_WX_SCHEDULER_LOCK = threading.Lock()
+
+
+def _wx_scheduler_tick() -> None:
+    """One pass of the scheduler. Runs any due section that hasn't run today.
+
+    Skips entirely on non-trading days (weekends + CN public holidays) — no
+    files are written and no guards are set, since there's no market data
+    worth logging.
+    """
+    now = _bj_now()
+    today = now.strftime("%Y-%m-%d")
+    # Drop guard entries from prior days so the set never grows unbounded.
+    stale = {k for k in _WX_RAN if k[0] != today}
+    _WX_RAN.difference_update(stale)
+
+    if not _is_cn_trading_day(now):
+        return
+
+    minutes_now = now.hour * 60 + now.minute
+    for section, h, m in _WX_SCHEDULE:
+        target = h * 60 + m
+        if minutes_now < target:
+            continue
+        key = (today, section)
+        if key in _WX_RAN:
+            continue
+        try:
+            _build_daily_wechat_article({
+                "trade_date": today,
+                "save_to_file": True,
+                "sections": [section],
+            })
+            _WX_RAN.add(key)
+            logging.info("wx scheduler wrote %s for %s", section, today)
+            # Optional auto-push: render HTML + WeCom ping.
+            # Enable by setting WECHAT_AUTO_PUSH=1 (and optionally WECOM_BOT_WEBHOOK).
+            if os.environ.get("WECHAT_AUTO_PUSH", "").strip() in {"1", "true", "yes"}:
+                try:
+                    res = _push_wxfile_to_wechat(today, section)
+                    logging.info("wx auto-push %s: %s", section, res.get("ok"))
+                except Exception as pe:
+                    logging.warning("wx auto-push %s failed: %s", section, pe)
+        except Exception as e:
+            logging.warning("wx scheduler %s failed: %s", section, e)
+
+
+def _wx_scheduler_loop() -> None:
+    while True:
+        try:
+            _wx_scheduler_tick()
+        except Exception as e:
+            logging.warning("wx scheduler tick error: %s", e)
+        time.sleep(60)
+
+
+def _start_wx_scheduler() -> None:
+    """Start the wxfile scheduler thread once per process."""
+    global _WX_SCHEDULER_STARTED
+    with _WX_SCHEDULER_LOCK:
+        if _WX_SCHEDULER_STARTED:
+            return
+        _WX_SCHEDULER_STARTED = True
+    t = threading.Thread(target=_wx_scheduler_loop, name="wx-scheduler", daemon=True)
+    t.start()
+    logging.info("wx scheduler started (08:30 / 12:30 / 16:00 BJT)")
+
+
+@app.route("/api/content/daily-schedule/status", methods=["GET"])
+def wx_schedule_status():
+    """Inspect the wxfile scheduler — what ran today, what's pending."""
+    today = _bj_date_str()
+    schedule = []
+    for section, h, m in _WX_SCHEDULE:
+        schedule.append({
+            "section": section,
+            "time": f"{h:02d}:{m:02d}",
+            "ran_today": (today, section) in _WX_RAN,
+        })
+    return jsonify({
+        "ok": True,
+        "running": _WX_SCHEDULER_STARTED,
+        "today": today,
+        "schedule": schedule,
+    })
+
+
+def _daily_wx_paths(trade_date: str, output_dir: str = "wxfile") -> dict[str, pathlib.Path]:
+    safe_date = re.sub(r"[^0-9\-]", "", (trade_date or "").strip())
+    if not safe_date:
+        safe_date = _bj_date_str()
+    base = cfg.DATA_DIR / output_dir
+    return {
+        "opening": base / f"{safe_date}_opening.md",
+        "intraday": base / f"{safe_date}_intraday.md",
+        "closing": base / f"{safe_date}_closing.md",
+    }
+
+
+@app.route("/api/content/daily-files/<trade_date>", methods=["GET"])
+def daily_files_by_date(trade_date):
+    """Return saved wx markdown files for a specific trade date."""
+    output_dir = (request.args.get("output_dir") or "wxfile").strip() or "wxfile"
+    include_content = (request.args.get("include_content") or "").strip().lower() in {"1", "true", "yes", "y"}
+    create_if_missing = (request.args.get("create_if_missing") or "").strip().lower() in {"1", "true", "yes", "y"}
+
+    paths = _daily_wx_paths(trade_date, output_dir)
+    if create_if_missing and not all(p.exists() for p in paths.values()):
+        _build_daily_wechat_article({
+            "trade_date": trade_date,
+            "save_to_file": True,
+            "output_dir": output_dir,
+        })
+
+    files = []
+    for section, p in paths.items():
+        item = {
+            "section": section,
+            "exists": p.exists(),
+            "path": str(p),
+            "relative": (pathlib.Path("data") / output_dir / p.name).as_posix(),
+        }
+        if include_content and p.exists():
+            item["content_markdown"] = p.read_text(encoding="utf-8")
+        files.append(item)
+
+    return jsonify({
+        "ok": True,
+        "trade_date": re.sub(r"[^0-9\-]", "", trade_date) or _bj_date_str(),
+        "output_dir": output_dir,
+        "files": files,
+    })
+
+
+@app.route("/api/content/daily-files/<trade_date>/<section>", methods=["GET"])
+def daily_file_by_date_section(trade_date, section):
+    """Return a single wx markdown section file for a specific date."""
+    section = (section or "").strip().lower()
+    if section not in {"opening", "intraday", "closing"}:
+        return jsonify({"ok": False, "error": "section must be opening|intraday|closing"}), 400
+
+    output_dir = (request.args.get("output_dir") or "wxfile").strip() or "wxfile"
+    create_if_missing = (request.args.get("create_if_missing") or "").strip().lower() in {"1", "true", "yes", "y"}
+    paths = _daily_wx_paths(trade_date, output_dir)
+    p = paths[section]
+
+    if create_if_missing and not p.exists():
+        _build_daily_wechat_article({
+            "trade_date": trade_date,
+            "save_to_file": True,
+            "output_dir": output_dir,
+        })
+
+    if not p.exists():
+        return jsonify({
+            "ok": False,
+            "error": "not found",
+            "section": section,
+            "trade_date": re.sub(r"[^0-9\-]", "", trade_date) or _bj_date_str(),
+        }), 404
+
+    return jsonify({
+        "ok": True,
+        "trade_date": re.sub(r"[^0-9\-]", "", trade_date) or _bj_date_str(),
+        "section": section,
+        "path": str(p),
+        "relative": (pathlib.Path("data") / output_dir / p.name).as_posix(),
+        "content_markdown": p.read_text(encoding="utf-8"),
+    })
+
+
 # ── Decision Journal ──────────────────────────────────────────────────────────
 
 @app.route("/api/decisions", methods=["GET"])
@@ -2786,4 +3576,8 @@ if __name__ == "__main__":
     print("Starting Stock Tracker -> http://localhost:5000")
     host = os.environ.get("HOST", "127.0.0.1")
     debug = os.environ.get("FLASK_DEBUG", "1") == "1"
+    # Flask debug-mode reloader spawns the app twice; only start the scheduler
+    # in the worker process to avoid duplicate runs.
+    if not debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        _start_wx_scheduler()
     app.run(host=host, debug=debug, port=5000)

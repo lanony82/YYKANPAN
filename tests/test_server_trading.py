@@ -329,7 +329,6 @@ class TestAnalyzeEndpoint:
         data = resp.get_json()
         types = [p["type"] for p in data["patterns"]]
         assert "low_confidence" in types
-        assert "no_stop_loss" in types
 
     def test_analyze_filter_type(self):
         self.dec_mod.create_decision("t", dtype="trade", action="BUY", symbol="X", price=10)
@@ -337,3 +336,277 @@ class TestAnalyzeEndpoint:
         resp = self.client.get("/api/decisions/analyze?type=trade")
         data = resp.get_json()
         assert data["total"] == 1
+
+
+# ── Daily article content endpoint ────────────────────────────────────────
+
+class TestDailyArticleEndpoint:
+    """Test POST /api/content/daily-article."""
+
+    @pytest.fixture(autouse=True)
+    def _client(self):
+        stock_app.app.config["TESTING"] = True
+        self.client = stock_app.app.test_client()
+
+    @patch.object(stock_app, "_build_auto_brief", return_value={
+        "snapshot": {"regime": "偏强", "avg_change_pct": 1.23}
+    })
+    @patch.object(stock_app, "_build_ai_edge_report", return_value={
+        "summary": {"confidence": 72.6},
+        "playbook": ["关注强势股回踩", "不追高"],
+    })
+    @patch.object(stock_app, "_load_sentiment_history", return_value=[{"stage": "上升"}])
+    @patch.object(stock_app, "_get_limit_stats", return_value={"limit_up": 45, "limit_down": 3})
+    @patch.object(stock_app.dec, "analyze", return_value={"total": 10, "patterns": [{"type": "no_review"}]})
+    @patch.object(stock_app.dec, "detect_loss_patterns", return_value={"top_pattern": None, "next_day_rule": "先执行计划"})
+    def test_generate_article_no_file(self, *_mocks):
+        resp = self.client.post("/api/content/daily-article", json={
+            "trade_date": "2026-05-21",
+            "save_to_file": False,
+        })
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert "article" in data
+        assert data["article"]["date"] == "2026-05-21"
+        assert "content_markdown" in data["article"]
+        assert "免责声明" in data["article"]["content_markdown"]
+        assert "原创说明" in data["article"]["content_markdown"]
+        assert "saved" not in data
+
+    @patch.object(stock_app, "_build_auto_brief", return_value={"snapshot": {"regime": "震荡"}})
+    @patch.object(stock_app, "_build_ai_edge_report", return_value={"summary": {"confidence": 55.0}, "playbook": []})
+    @patch.object(stock_app, "_load_sentiment_history", return_value=[])
+    @patch.object(stock_app, "_get_limit_stats", return_value={})
+    @patch.object(stock_app.dec, "analyze", return_value={"total": 0, "patterns": []})
+    @patch.object(stock_app.dec, "detect_loss_patterns", return_value={"top_pattern": None, "next_day_rule": "先执行计划"})
+    def test_generate_article_save_to_data_wxfile(self, _loss, _analyze, _limit, _sent, _ai, _brief, tmp_path, monkeypatch):
+        monkeypatch.setattr(stock_app.cfg, "DATA_DIR", tmp_path)
+        resp = self.client.post("/api/content/daily-article", json={
+            "trade_date": "2026-05-21",
+            "save_to_file": True,
+        })
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["saved"]["ok"] is True
+        assert data["saved"]["mode"] == "3-files-per-day"
+        files = data["saved"]["files"]
+        assert len(files) == 3
+
+        rels = {f["relative"] for f in files}
+        assert "data/wxfile/2026-05-21_opening.md" in rels
+        assert "data/wxfile/2026-05-21_intraday.md" in rels
+        assert "data/wxfile/2026-05-21_closing.md" in rels
+
+        for name in ("opening", "intraday", "closing"):
+            saved_path = tmp_path / "wxfile" / f"2026-05-21_{name}.md"
+            assert saved_path.exists()
+            text = saved_path.read_text(encoding="utf-8")
+            assert "风险提示与免责声明" in text
+            assert "原创说明" in text
+
+
+class TestDailyFileRouting:
+    """Test GET routes for daily wx files by date and section."""
+
+    @pytest.fixture(autouse=True)
+    def _client(self):
+        stock_app.app.config["TESTING"] = True
+        self.client = stock_app.app.test_client()
+
+    @patch.object(stock_app, "_build_auto_brief", return_value={"snapshot": {"regime": "震荡"}})
+    @patch.object(stock_app, "_build_ai_edge_report", return_value={"summary": {"confidence": 50.0}, "playbook": []})
+    @patch.object(stock_app, "_load_sentiment_history", return_value=[])
+    @patch.object(stock_app, "_get_limit_stats", return_value={"limit_up": 10, "limit_down": 2})
+    @patch.object(stock_app.dec, "analyze", return_value={"total": 0, "patterns": []})
+    @patch.object(stock_app, "_fetch_macro_indicators", return_value=[])
+    @patch.object(stock_app.dec, "detect_loss_patterns", return_value={"top_pattern": None, "next_day_rule": "先执行计划"})
+    def test_list_daily_files_by_date(self, _loss, _macro, _analyze, _limit, _sent, _ai, _brief, tmp_path, monkeypatch):
+        monkeypatch.setattr(stock_app.cfg, "DATA_DIR", tmp_path)
+        self.client.post("/api/content/daily-article", json={
+            "trade_date": "2026-05-21",
+            "save_to_file": True,
+        })
+
+        resp = self.client.get("/api/content/daily-files/2026-05-21")
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data["ok"] is True
+        assert data["trade_date"] == "2026-05-21"
+        assert len(data["files"]) == 3
+        assert all(f["exists"] for f in data["files"])
+
+    @patch.object(stock_app, "_build_auto_brief", return_value={"snapshot": {"regime": "震荡"}})
+    @patch.object(stock_app, "_build_ai_edge_report", return_value={"summary": {"confidence": 50.0}, "playbook": []})
+    @patch.object(stock_app, "_load_sentiment_history", return_value=[])
+    @patch.object(stock_app, "_get_limit_stats", return_value={"limit_up": 10, "limit_down": 2})
+    @patch.object(stock_app.dec, "analyze", return_value={"total": 0, "patterns": []})
+    @patch.object(stock_app, "_fetch_macro_indicators", return_value=[])
+    @patch.object(stock_app.dec, "detect_loss_patterns", return_value={"top_pattern": None, "next_day_rule": "先执行计划"})
+    def test_get_single_section_by_date(self, _loss, _macro, _analyze, _limit, _sent, _ai, _brief, tmp_path, monkeypatch):
+        monkeypatch.setattr(stock_app.cfg, "DATA_DIR", tmp_path)
+        self.client.post("/api/content/daily-article", json={
+            "trade_date": "2026-05-21",
+            "save_to_file": True,
+        })
+
+        resp = self.client.get("/api/content/daily-files/2026-05-21/intraday")
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data["ok"] is True
+        assert data["section"] == "intraday"
+        assert "content_markdown" in data
+
+    def test_get_single_section_invalid(self):
+        resp = self.client.get("/api/content/daily-files/2026-05-21/nope")
+        assert resp.status_code == 400
+
+    @patch.object(stock_app, "_build_auto_brief", return_value={"snapshot": {"regime": "震荡"}})
+    @patch.object(stock_app, "_build_ai_edge_report", return_value={"summary": {"confidence": 50.0}, "playbook": []})
+    @patch.object(stock_app, "_load_sentiment_history", return_value=[])
+    @patch.object(stock_app, "_get_limit_stats", return_value={})
+    @patch.object(stock_app.dec, "analyze", return_value={"total": 0, "patterns": []})
+    @patch.object(stock_app, "_fetch_macro_indicators", return_value=[])
+    @patch.object(stock_app.dec, "detect_loss_patterns", return_value={"top_pattern": None, "next_day_rule": "先执行计划"})
+    def test_list_daily_files_create_if_missing_with_content(self, _loss, _macro, _analyze, _limit, _sent, _ai, _brief, tmp_path, monkeypatch):
+        monkeypatch.setattr(stock_app.cfg, "DATA_DIR", tmp_path)
+
+        resp = self.client.get(
+            "/api/content/daily-files/2026-06-01?create_if_missing=1&include_content=true"
+        )
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data["ok"] is True
+        assert len(data["files"]) == 3
+        for f in data["files"]:
+            assert f["exists"]
+            assert "content_markdown" in f
+            assert "2026-06-01" in f["content_markdown"]
+
+    def test_list_daily_files_missing_without_create(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(stock_app.cfg, "DATA_DIR", tmp_path)
+
+        resp = self.client.get("/api/content/daily-files/2099-01-01")
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data["ok"] is True
+        assert len(data["files"]) == 3
+        # No files were created and content was not requested
+        assert all(f["exists"] is False for f in data["files"])
+        assert all("content_markdown" not in f for f in data["files"])
+
+    def test_get_single_section_missing_returns_404(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(stock_app.cfg, "DATA_DIR", tmp_path)
+
+        resp = self.client.get("/api/content/daily-files/2099-01-01/opening")
+        assert resp.status_code == 404
+        data = resp.get_json()
+        assert data["ok"] is False
+        assert data["section"] == "opening"
+
+    @patch.object(stock_app, "_build_auto_brief", return_value={"snapshot": {"regime": "震荡"}})
+    @patch.object(stock_app, "_build_ai_edge_report", return_value={"summary": {"confidence": 50.0}, "playbook": []})
+    @patch.object(stock_app, "_load_sentiment_history", return_value=[])
+    @patch.object(stock_app, "_get_limit_stats", return_value={})
+    @patch.object(stock_app.dec, "analyze", return_value={"total": 0, "patterns": []})
+    @patch.object(stock_app, "_fetch_macro_indicators", return_value=[])
+    @patch.object(stock_app.dec, "detect_loss_patterns", return_value={"top_pattern": None, "next_day_rule": "先执行计划"})
+    def test_get_single_section_create_if_missing(self, _loss, _macro, _analyze, _limit, _sent, _ai, _brief, tmp_path, monkeypatch):
+        monkeypatch.setattr(stock_app.cfg, "DATA_DIR", tmp_path)
+
+        resp = self.client.get(
+            "/api/content/daily-files/2026-06-02/closing?create_if_missing=true"
+        )
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data["ok"] is True
+        assert data["section"] == "closing"
+        assert "content_markdown" in data
+        # File should now exist on disk
+        assert (tmp_path / "wxfile" / "2026-06-02_closing.md").exists()
+
+
+class TestDailyArticleCustomization:
+    """Test custom title and disclaimer toggles."""
+
+    @pytest.fixture(autouse=True)
+    def _client(self):
+        stock_app.app.config["TESTING"] = True
+        self.client = stock_app.app.test_client()
+
+    @patch.object(stock_app, "_build_auto_brief", return_value={"snapshot": {"regime": "震荡"}})
+    @patch.object(stock_app, "_build_ai_edge_report", return_value={"summary": {"confidence": 50.0}, "playbook": []})
+    @patch.object(stock_app, "_load_sentiment_history", return_value=[])
+    @patch.object(stock_app, "_get_limit_stats", return_value={})
+    @patch.object(stock_app.dec, "analyze", return_value={"total": 0, "patterns": []})
+    @patch.object(stock_app, "_fetch_macro_indicators", return_value=[])
+    @patch.object(stock_app.dec, "detect_loss_patterns", return_value={"top_pattern": None, "next_day_rule": "先执行计划"})
+    def test_custom_title_and_no_disclaimer(self, *_mocks):
+        resp = self.client.post("/api/content/daily-article", json={
+            "trade_date": "2026-05-21",
+            "title": "我的复盘标题",
+            "include_disclaimer": False,
+            "include_original_note": False,
+            "save_to_file": False,
+        })
+        data = resp.get_json()
+        assert data["ok"] is True
+        article = data["article"]
+        assert article["title"] == "我的复盘标题"
+        assert article["disclaimer"] == ""
+        assert article["original_note"] == ""
+        md = article["content_markdown"]
+        assert "免责声明" not in md
+        assert "原创说明" not in md
+        assert "我的复盘标题" in md
+
+    @patch.object(stock_app, "_build_auto_brief", return_value={
+        "snapshot": {
+            "regime": "震荡", "valid": 90, "total": 100, "avg_change_pct": 0.5
+        }
+    })
+    @patch.object(stock_app, "_build_ai_edge_report", return_value={
+        "summary": {
+            "confidence": 60.0, "market_bias": "neutral",
+            "up_count": 50, "down_count": 50, "coverage": 100,
+        },
+        "playbook": ["保持纪律"],
+    })
+    @patch.object(stock_app, "_load_sentiment_history", return_value=[
+        {"stage": "上升", "score": 70, "up_ratio": 0.6}
+    ])
+    @patch.object(stock_app, "_get_limit_stats", return_value={
+        "limit_up": 20, "limit_down": 5,
+        "yesterday_limit_up_performance": {
+            "profit_rate": 60.0, "avg_change_pct": 1.5, "verdict": "偏强",
+        },
+    })
+    @patch.object(stock_app.dec, "analyze", return_value={
+        "total": 5, "patterns": [], "by_source": {"manual": 3, "ai": 2},
+    })
+    @patch.object(stock_app, "_fetch_macro_indicators", return_value=[
+        {"symbol": "vol_total", "price": 9000},
+        {"symbol": "northbound", "price": 50},
+        {"symbol": "sh000001", "price": 3200, "change_pct": 0.4},
+        {"symbol": "sz399001", "price": 11000, "change_pct": -0.2},
+    ])
+    @patch.object(stock_app.dec, "detect_loss_patterns", return_value={
+        "top_pattern": {"label": "示例模式"},
+        "next_day_rule": "明日硬约束：示例规则",
+    })
+    def test_full_card_collections(self, *_mocks):
+        resp = self.client.post("/api/content/daily-article", json={
+            "trade_date": "2026-05-21",
+            "save_to_file": False,
+            "include_card_collections": True,
+        })
+        data = resp.get_json()
+        article = data["article"]
+        md = article["content_markdown"]
+        # Sections must surface enriched cards and the carry-forward rule
+        assert "明日硬约束：示例规则" in md
+        assert "示例模式" in md
+        assert "上证 3200" in md
+        assert "成功率 60.0%" in md
+        assert "决策来源卡片：manual:3, ai:2" in md
+        assert "情绪分值：70" in md

@@ -2577,7 +2577,6 @@ updateAutoRefreshStatus();
       });
       const ta = document.getElementById("dec-trade-action");
       if (ta) ta.selectedIndex = 0;
-      document.getElementById("decision-form-wrap").removeAttribute("open");
       loadDecisions();
       setTimeout(() => { document.getElementById("dec-msg").textContent = ""; }, 2000);
     } else {

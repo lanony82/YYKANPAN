@@ -567,6 +567,111 @@ Pattern types: `low_confidence`, `no_stop_loss`, `no_review`, `ai_ratio`, `overt
 
 ---
 
+## Content Publishing (公众号内容)
+
+### POST /api/content/daily-article
+Generate a publish-ready daily WeChat article draft (开盘/盘中/盘后) with a built-in disclaimer.
+
+By default, the endpoint also saves **3 files per trade day** under `data/wxfile/`:
+- `YYYY-MM-DD_opening.md`
+- `YYYY-MM-DD_intraday.md`
+- `YYYY-MM-DD_closing.md`
+
+**Body** (all optional):
+```json
+{
+  "trade_date": "2026-05-21",
+  "title": "2026-05-21 交易日复盘：开盘-盘中-盘后决策日志",
+  "include_disclaimer": true,
+  "include_original_note": true,
+  "include_card_collections": true,
+  "save_to_file": true,
+  "output_dir": "wxfile"
+}
+```
+
+**Response**:
+```json
+{
+  "ok": true,
+  "article": {
+    "date": "2026-05-21",
+    "title": "2026-05-21 交易日复盘：开盘-盘中-盘后决策日志",
+    "sections": {
+      "opening": ["..."],
+      "intraday": ["..."],
+      "closing": ["..."]
+    },
+    "disclaimer": "风险提示与免责声明...",
+    "original_note": "原创说明：...",
+    "content_markdown": "# ..."
+  },
+  "saved": {
+    "ok": true,
+    "mode": "3-files-per-day",
+    "files": [
+      {"section": "opening", "relative": "data/wxfile/2026-05-21_opening.md", "path": "..."},
+      {"section": "intraday", "relative": "data/wxfile/2026-05-21_intraday.md", "path": "..."},
+      {"section": "closing", "relative": "data/wxfile/2026-05-21_closing.md", "path": "..."}
+    ]
+  }
+}
+```
+
+Use `"save_to_file": false` when you only need API output and do not want local file writes.
+Use `"include_original_note": false` to omit the original-content statement.
+Use `"include_card_collections": true` (default) to embed richer card metrics (macro/sentiment/limit-stats/AI summary/decision stats).
+
+### GET /api/content/daily-files/:trade_date
+List daily wx article files (opening/intraday/closing) for a given date.
+
+**Params**:
+- `output_dir` (default: `wxfile`)
+- `include_content` = `1|true` to include markdown text
+- `create_if_missing` = `1|true` to auto-generate missing files first
+
+**Response**:
+```json
+{
+  "ok": true,
+  "trade_date": "2026-05-21",
+  "output_dir": "wxfile",
+  "files": [
+    {"section": "opening", "exists": true, "relative": "data/wxfile/2026-05-21_opening.md", "path": "..."},
+    {"section": "intraday", "exists": true, "relative": "data/wxfile/2026-05-21_intraday.md", "path": "..."},
+    {"section": "closing", "exists": true, "relative": "data/wxfile/2026-05-21_closing.md", "path": "..."}
+  ]
+}
+```
+
+### GET /api/content/daily-files/:trade_date/:section
+Fetch a single section file for a given date.
+
+**Path**:
+- `section` = `opening` | `intraday` | `closing`
+
+**Params**:
+- `output_dir` (default: `wxfile`)
+- `create_if_missing` = `1|true` to auto-generate if absent
+
+**Response**:
+```json
+{
+  "ok": true,
+  "trade_date": "2026-05-21",
+  "section": "intraday",
+  "relative": "data/wxfile/2026-05-21_intraday.md",
+  "path": "...",
+  "content_markdown": "# ..."
+}
+```
+
+**Errors**:
+- `400` invalid section
+- `404` file not found (when not auto-generated)
+
+---
+
 ## AutoDev (自动决策循环)
 
 ### GET /api/strategies

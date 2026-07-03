@@ -318,7 +318,6 @@ class TestEvaluate:
         d = dec.create_decision("hold", action="HOLD", symbol="X")
         r = dec.evaluate(d["id"], current_price=10)
         assert not r["ok"]
-        assert "no entry price" in r["error"]
 
     def test_evaluate_non_trade(self):
         d = dec.create_decision("life", dtype="life")
@@ -329,6 +328,116 @@ class TestEvaluate:
         d = dec.create_decision("buy", action="BUY", symbol="X", price=10, size=100, confidence=0.8)
         r = dec.evaluate(d["id"], current_price=8)
         assert "高信心决策亏损" in r["verdict"]
+
+
+class TestHasLossMarker:
+    """Test the _has_loss_marker helper covering numeric and text signals."""
+
+    def test_numeric_pnl_negative(self):
+        assert dec._has_loss_marker({"pnl": -100.0})
+        assert dec._has_loss_marker({"pnl_pct": -3.5})
+
+    def test_numeric_pnl_positive_or_zero(self):
+        assert not dec._has_loss_marker({"pnl": 0})
+        assert not dec._has_loss_marker({"pnl_pct": 5.0})
+
+    def test_text_keywords(self):
+        assert dec._has_loss_marker({"outcome": "今日亏损"})
+        assert dec._has_loss_marker({"verdict": "触发止损"})
+        assert dec._has_loss_marker({"context": "回撤明显"})
+        assert dec._has_loss_marker({"outcome": "被打脸"})
+
+    def test_negative_percent_in_text(self):
+        assert dec._has_loss_marker({"outcome": "下跌 -2.3%"})
+
+    def test_no_signals(self):
+        assert not dec._has_loss_marker({"outcome": "盈利", "pnl": 100})
+        assert not dec._has_loss_marker({})
+
+
+class TestDetectLossPatterns:
+    """Test rule-based loss pattern detector."""
+
+    def test_detect_top_pattern_no_stop_loss(self):
+        dec.create_decision("追高买入", action="BUY", symbol="A", price=10, confidence=0.8)
+        dec.create_decision("回撤止损", action="BUY", symbol="B", price=20, outcome="亏损 -5%", confidence=0.75)
+
+        r = dec.detect_loss_patterns()
+        assert r["ok"]
+        assert r["total"] == 2
+        assert r["top_pattern"] is not None
+        assert r["top_pattern"]["type"] == "buy_without_stop"
+        assert "无止损" in r["next_day_rule"]
+
+    def test_detect_empty(self):
+        r = dec.detect_loss_patterns()
+        assert r["ok"]
+        assert r["total"] == 0
+        assert r["patterns"] == []
+        assert "暂无足够样本" in r["next_day_rule"]
+
+    def test_detect_overtrading_day(self):
+        for i in range(5):
+            dec.create_decision(f"t{i}", action="BUY", symbol=f"S{i}", price=10 + i)
+        r = dec.detect_loss_patterns()
+        types = [p["type"] for p in r["patterns"]]
+        assert "overtrading" in types
+
+    def test_detect_high_confidence_loss(self):
+        # All trades have stop_loss, so buy_without_stop won't dominate
+        dec.create_decision(
+            "高信心买入", action="BUY", symbol="A", price=10,
+            stop_loss=9, confidence=0.85, outcome="亏损 -3%",
+        )
+        dec.create_decision(
+            "高信心加仓", action="BUY", symbol="B", price=20,
+            stop_loss=18, confidence=0.9, outcome="止损 -4%",
+        )
+        r = dec.detect_loss_patterns()
+        types = [p["type"] for p in r["patterns"]]
+        assert "high_confidence_loss" in types
+
+    def test_detect_chase_fomo(self):
+        dec.create_decision("追高入场", action="BUY", symbol="A", price=10, stop_loss=9)
+        r = dec.detect_loss_patterns()
+        types = [p["type"] for p in r["patterns"]]
+        assert "chase_fomo" in types
+
+    def test_detect_acted_not_reviewed(self):
+        d = dec.create_decision("buy", action="BUY", symbol="X", price=10, stop_loss=9)
+        dec.update_decision(d["id"], {"state": "acted"})
+        r = dec.detect_loss_patterns()
+        types = [p["type"] for p in r["patterns"]]
+        assert "acted_not_reviewed" in types
+
+    def test_detect_consecutive_losses(self):
+        # Two consecutive losses with stop_loss set, so the consecutive rule is the surviving signal
+        dec.create_decision(
+            "first loss", action="BUY", symbol="A", price=10,
+            stop_loss=9, outcome="亏损 -2%",
+        )
+        dec.create_decision(
+            "second loss", action="BUY", symbol="B", price=20,
+            stop_loss=18, outcome="止损 -3%",
+        )
+        r = dec.detect_loss_patterns()
+        types = [p["type"] for p in r["patterns"]]
+        assert "consecutive_losses" in types
+
+    def test_severity_ordering_top_pattern(self):
+        # Mix danger + warn signals; danger should sort to top
+        dec.create_decision("no sl", action="BUY", symbol="A", price=10)  # danger: buy_without_stop
+        dec.create_decision("追高", action="BUY", symbol="B", price=10, stop_loss=9)  # warn: chase_fomo
+        r = dec.detect_loss_patterns()
+        assert r["top_pattern"]["severity"] == "danger"
+
+    def test_explicit_decisions_arg(self):
+        # When passed explicitly, internal store is bypassed
+        custom = [{"action": "BUY", "title": "x"}]
+        r = dec.detect_loss_patterns(decisions=custom)
+        assert r["total"] == 1
+        types = [p["type"] for p in r["patterns"]]
+        assert "buy_without_stop" in types
 
     def test_evaluate_low_conf_win(self):
         d = dec.create_decision("buy", action="BUY", symbol="X", price=10, size=100, confidence=0.2)

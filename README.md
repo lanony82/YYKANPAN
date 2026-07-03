@@ -116,6 +116,16 @@ python src/server.py
 
 打开 http://127.0.0.1:5000
 
+### Windows 一键启停
+
+```powershell
+# 启动（后台）
+.\win_tool\start_server.ps1
+
+# 停止
+.\win_tool\stop_server.ps1
+```
+
 ## 项目结构
 
 ```
