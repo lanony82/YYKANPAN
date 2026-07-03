@@ -529,7 +529,7 @@ class TestRiskEventsEndpoint:
         """Shanghai index drop >=3% should trigger event."""
         with patch.object(stock_app, "_fetch_macro_indicators", return_value=[
             {"name": "上证指数", "change_pct": -3.5, "price": 3200, "prev": 3316},
-        ]):
+        ]), patch.object(stock_app, "_scan_news_events", return_value=[]):
             rv = client.get("/api/risk-events")
             data = rv.get_json()
             assert data["count"] >= 1
@@ -539,7 +539,7 @@ class TestRiskEventsEndpoint:
         """Same event within same hour should not duplicate."""
         with patch.object(stock_app, "_fetch_macro_indicators", return_value=[
             {"name": "上证指数", "change_pct": -5.0, "price": 3100, "prev": 3263},
-        ]):
+        ]), patch.object(stock_app, "_scan_news_events", return_value=[]):
             client.get("/api/risk-events")
             client.get("/api/risk-events")
             rv = client.get("/api/risk-events?period=30d")
@@ -550,14 +550,16 @@ class TestRiskEventsEndpoint:
 
     def test_risk_events_period_filter(self, client):
         """Period parameter should be returned in response."""
-        with patch.object(stock_app, "_fetch_macro_indicators", return_value=[]):
+        with patch.object(stock_app, "_fetch_macro_indicators", return_value=[]), \
+             patch.object(stock_app, "_scan_news_events", return_value=[]):
             rv = client.get("/api/risk-events?period=7d")
             data = rv.get_json()
             assert data["period"] == "7d"
 
     def test_stock_limit_down_triggers_event(self, client):
         """A stock dropping >=9.8% should trigger a black swan event."""
-        with patch.object(stock_app, "_fetch_macro_indicators", return_value=[]):
+        with patch.object(stock_app, "_fetch_macro_indicators", return_value=[]), \
+             patch.object(stock_app, "_scan_news_events", return_value=[]):
             stock_app.STOCKS_CACHE_DATA = [
                 {"ticker": "600001.SS", "name": "测试股", "change_pct": -10.0, "price": 9.0},
             ]

@@ -23,9 +23,10 @@ watchlist_cn copy.json
 
 # Personal generated market data
 data/*.csv
-data/sentiment_last_known.json
-data/sentiment_history.json
+data/sentiment_last_known*.json
+data/sentiment_history*.json
 data/decisions.json
+data/wxfile/
 
 # Build artifacts
 *.egg-info/

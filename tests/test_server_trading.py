@@ -380,7 +380,9 @@ class TestDailyArticleEndpoint:
     @patch.object(stock_app, "_get_limit_stats", return_value={})
     @patch.object(stock_app.dec, "analyze", return_value={"total": 0, "patterns": []})
     @patch.object(stock_app.dec, "detect_loss_patterns", return_value={"top_pattern": None, "next_day_rule": "先执行计划"})
-    def test_generate_article_save_to_data_wxfile(self, _loss, _analyze, _limit, _sent, _ai, _brief, tmp_path, monkeypatch):
+    @patch.object(stock_app, "_fetch_pd_image", return_value=False)
+    @patch.object(stock_app, "_collect_closing_news", return_value={"risk_events": [], "cctv": []})
+    def test_generate_article_save_to_data_wxfile(self, _news, _img, _loss, _analyze, _limit, _sent, _ai, _brief, tmp_path, monkeypatch):
         monkeypatch.setattr(stock_app.cfg, "DATA_DIR", tmp_path)
         resp = self.client.post("/api/content/daily-article", json={
             "trade_date": "2026-05-21",
@@ -413,6 +415,14 @@ class TestDailyFileRouting:
     def _client(self):
         stock_app.app.config["TESTING"] = True
         self.client = stock_app.app.test_client()
+
+    @pytest.fixture(autouse=True)
+    def _stub_network(self):
+        # Prevent daily-article file generation from hitting the real network
+        # (Wikimedia image fetch + CLS/CCTV news collection).
+        with patch.object(stock_app, "_fetch_pd_image", return_value=False), \
+             patch.object(stock_app, "_collect_closing_news", return_value={"risk_events": [], "cctv": []}):
+            yield
 
     @patch.object(stock_app, "_build_auto_brief", return_value={"snapshot": {"regime": "震荡"}})
     @patch.object(stock_app, "_build_ai_edge_report", return_value={"summary": {"confidence": 50.0}, "playbook": []})
