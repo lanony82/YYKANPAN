@@ -19,7 +19,8 @@
       "Bash(python3 -m pytest --version)",
       "Bash(UV_PYTHON_INSTALL_DIR=C:/Users/myang2/AppData/Roaming/uv/python uv sync --quiet)",
       "Bash(uv --version)",
-      "Bash(python3 -m pytest -q tests/test_new_features.py --deselect \"tests/test_new_features.py::TestProvidersEndpoint\")"
+      "Bash(python3 -m pytest -q tests/test_new_features.py --deselect \"tests/test_new_features.py::TestProvidersEndpoint\")",
+      "Bash(timeout 60 python3 -m pytest tests/smoke_test.py -v --tb=no)"
     ]
   }
 }
